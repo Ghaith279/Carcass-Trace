@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carcass Trace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Carcass <span>Trace</span></h1>
+    <div class="who" id="who" hidden><span id="whoEmail"></span><button class="btn small" id="signOut" type="button">Sign out</button></div>
+  </header>
+
+  <!-- Not configured -->
+  <section id="v-config" class="center" hidden>
+    <div class="panel narrow"><h2>Almost there</h2><p>Open <span class="code">config.js</span> and fill in the Supabase address and key. The README explains where to find them.</p></div>
+  </section>
+
+  <!-- Sign in -->
+  <section id="v-login" class="center" hidden>
+    <form class="panel narrow" id="loginForm">
+      <h2>Sign in</h2>
+      <label>Email<input id="lEmail" type="email" autocomplete="username" required></label>
+      <label>Password<input id="lPass" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <div id="lMsg"></div>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <nav role="tablist" id="nav">
+      <button role="tab" data-tab="receive">Receive</button>
+      <button role="tab" data-tab="cut">Cutting room</button>
+      <button role="tab" data-tab="pack">Online packing</button>
+      <button role="tab" data-tab="counter">Shop counter</button>
+      <button role="tab" data-tab="stock">Stock</button>
+      <button role="tab" data-tab="carcasses">Carcasses &amp; yield</button>
+      <button role="tab" data-tab="trace">Trace</button>
+      <button role="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <!-- RECEIVE -->
+    <section id="v-receive" class="grid" hidden>
+      <form class="panel" id="rForm">
+        <div><h2>Receive a carcass</h2><p class="hint">Weigh it and fill this in. The system gives it a number and prints its label.</p></div>
+        <div class="row2">
+          <label>Animal<select id="rSpecies"><option>Sheep</option><option>Beef</option><option>Camel</option></select></label>
+          <label>Weight (kg)<input id="rWeight" type="number" step="0.01" min="0.1" inputmode="decimal" required></label>
+        </div>
+        <label>Ear tag number<input id="rTag" autocomplete="off"></label>
+        <label>Farm<input id="rFarm" list="farmList" autocomplete="off"></label>
+        <div class="row2">
+          <label>Slaughterhouse<input id="rAbattoir" list="abattoirList" autocomplete="off"></label>
+          <label>Kill number<input id="rKill" autocomplete="off"></label>
+        </div>
+        <datalist id="farmList"></datalist><datalist id="abattoirList"></datalist>
+        <label class="inline"><input type="checkbox" id="rAutoPrint" checked> Print the carcass label</label>
+        <button class="btn primary big" type="submit" id="rSubmit">Register carcass</button>
+        <div id="rMsg"></div>
+      </form>
+      <div class="panel">
+        <h2>In the chiller or being cut</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">kg</th><th>Status</th><th></th></tr></thead>
+          <tbody id="rRows"></tbody>
+        </table></div>
+        <p class="empty" id="rEmpty">No carcasses waiting. Register one on the left when it arrives.</p>
+      </div>
+    </section>
+
+    <!-- CUTTING ROOM -->
+    <section id="v-cut" class="grid" hidden>
+      <div class="stack">
+        <div class="panel">
+          <div><h2>Carcass on the block</h2><p class="hint">Scan the carcass label. One carcass at a time.</p></div>
+          <input class="scan" id="cScan" placeholder="Scan carcass label" autocomplete="off">
+          <label class="inline"><input type="checkbox" id="cBatch"> Mince or mixed batch (several carcasses)</label>
+          <div id="cActive" class="empty">No carcass selected.</div>
+          <div class="btns" id="cActiveBtns" hidden>
+            <button class="btn small" id="cFinish" type="button">Carcass finished</button>
+            <button class="btn small" id="cClear" type="button">Clear</button>
+          </div>
+          <div id="cOpenWrap"><h3 style="margin-bottom:6px">Or tap one</h3><div class="chips" id="cOpen"></div></div>
+        </div>
+        <div class="panel">
+          <div><h2>Product</h2><p class="hint">Tap a product, scan its barcode, or search.</p></div>
+          <input id="cProdSearch" placeholder="Search or scan product barcode" autocomplete="off">
+          <div class="products" id="cProducts"></div>
+          <p class="empty" id="cProdEmpty" hidden>No products for this animal. Add them in Settings.</p>
+        </div>
+      </div>
+      <div class="stack">
+        <form class="panel" id="cPrintForm">
+          <h2 id="cSelTitle">Choose a product</h2>
+          <p class="hint" id="cSelInfo">Labels will show the product, weight, carcass number and use-by date.</p>
+          <div class="row2">
+            <label>Weight per tray (kg)<input id="cWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
+            <label>Number of trays<div class="stepper"><button class="btn" type="button" id="cMinus" aria-label="One less">−</button><input id="cCount" type="number" min="1" max="200" value="1" inputmode="numeric"><button class="btn" type="button" id="cPlus" aria-label="One more">+</button></div></label>
+          </div>
+          <button class="btn primary big" type="submit" id="cPrintBtn" disabled>Print labels</button>
+          <div id="cMsg"></div>
+        </form>
+        <div class="panel">
+          <h2>Trays from this carcass</h2>
+          <p class="hint" id="cYield"></p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Tray</th><th>Product</th><th class="num">kg</th><th>Use by</th><th>Status</th><th></th></tr></thead>
+            <tbody id="cRows"></tbody>
+          </table></div>
+          <p class="empty" id="cRowsEmpty">Select a carcass to see its trays.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ONLINE PACKING -->
+    <section id="v-pack" class="grid" hidden>
+      <div class="stack">
+        <form class="panel" id="pOrderForm">
+          <div><h2>Zid order</h2><p class="hint">Type or scan the Zid order number, then scan each tray as you pack it.</p></div>
+          <div style="display:flex;gap:8px"><input class="scan" id="pOrderNo" placeholder="Order number" autocomplete="off" inputmode="numeric"><button class="btn" type="submit">Open</button></div>
+          <div id="pOrderInfo"></div>
+        </form>
+        <div class="panel">
+          <h3>Recent online orders</h3>
+          <div class="table-wrap"><table><tbody id="pRecent"></tbody></table></div>
+          <p class="empty" id="pRecentEmpty">No orders packed yet.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2 id="pTitle">Packing</h2>
+        <input class="scan" id="pScan" placeholder="Scan tray label" autocomplete="off" disabled>
+        <div id="pMsg"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
+          <tbody id="pRows"></tbody>
+        </table></div>
+        <p class="empty" id="pEmpty">Open an order to start packing.</p>
+        <button class="btn primary big" id="pConfirm" type="button" disabled>Confirm packed</button>
+        <div id="pResult"></div>
+      </div>
+    </section>
+
+    <!-- SHOP COUNTER -->
+    <section id="v-counter" class="grid" hidden>
+      <div class="stack">
+        <div class="panel">
+          <div><h2>Shop counter</h2><p class="hint">Scan each tray the customer takes. For a whole or half carcass, scan the carcass label.</p></div>
+          <input class="scan" id="kScan" placeholder="Scan tray or carcass label" autocomplete="off">
+          <div id="kMsg"></div>
+        </div>
+        <div class="panel">
+          <h3>Recent counter sales</h3>
+          <div class="table-wrap"><table><tbody id="kRecent"></tbody></table></div>
+          <p class="empty" id="kRecentEmpty">No counter sales yet.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Leaving now</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Item</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
+          <tbody id="kRows"></tbody>
+        </table></div>
+        <p class="empty" id="kEmpty">Scan a tray to start.</p>
+        <label>POS receipt number (optional)<input id="kReceipt" autocomplete="off"></label>
+        <button class="btn primary big" id="kConfirm" type="button" disabled>Confirm sale</button>
+        <div id="kResult"></div>
+      </div>
+    </section>
+
+    <!-- STOCK -->
+    <section id="v-stock" hidden>
+      <div class="stack">
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2>Stock by product</h2><button class="btn small" id="sRefresh" type="button">Refresh</button></div>
+          <div class="stat-row" id="sStats"></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th>Oldest use-by</th><th>Shelf life</th></tr></thead>
+            <tbody id="sRows"></tbody>
+          </table></div>
+          <p class="empty" id="sEmpty">No trays in stock.</p>
+        </div>
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <h2>Trays in stock</h2>
+            <select id="sFilter" style="width:auto"><option value="all">All trays</option><option value="soon">Expiring soon</option><option value="expired">Expired</option></select>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th><input type="checkbox" id="sAll" aria-label="Select all"></th><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th>Packed</th><th>Use by</th></tr></thead>
+            <tbody id="sTrays"></tbody>
+          </table></div>
+          <p class="empty" id="sTraysEmpty">Nothing here.</p>
+          <div class="btns" style="align-items:center">
+            <select id="sReason" style="width:auto"><option>Expired</option><option>Damaged</option><option>Missing at stock check</option><option>Used in shop</option><option>Other</option></select>
+            <button class="btn danger" id="sWriteOff" type="button" disabled>Take selected out of stock</button>
+          </div>
+          <div id="sMsg"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CARCASSES & YIELD -->
+    <section id="v-carcasses" hidden>
+      <div class="stack">
+        <div class="panel">
+          <h2>Average yield by farm</h2>
+          <p class="hint">Finished carcasses only. Yield = kg packed into trays ÷ kg received.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Farm</th><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg received kg</th><th class="num">Avg yield</th></tr></thead>
+            <tbody id="yFarms"></tbody>
+          </table></div>
+          <p class="empty" id="yFarmsEmpty">No finished carcasses yet.</p>
+        </div>
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <h2>All carcasses</h2>
+            <select id="ySpecies" style="width:auto"><option value="">All animals</option><option>Sheep</option><option>Beef</option><option>Camel</option></select>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">Received kg</th><th class="num">Packed kg</th><th class="num">Yield</th><th class="num">In stock</th><th class="num">Sold</th><th>Status</th></tr></thead>
+            <tbody id="yRows"></tbody>
+          </table></div>
+          <p class="empty" id="yEmpty">No carcasses yet.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TRACE -->
+    <section id="v-trace" hidden>
+      <div class="panel" style="margin-bottom:18px">
+        <div><h2>Trace anything</h2><p class="hint">Scan or type a tray label, carcass number, Zid order number, receipt number or ear tag.</p></div>
+        <input class="scan" id="tScan" placeholder="Tray, carcass, order or ear tag" autocomplete="off">
+      </div>
+      <div id="tOut"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="v-settings" hidden>
+      <div class="stack">
+        <div class="panel">
+          <h2>Zid</h2>
+          <p id="zStatus" class="hint">Checking connection…</p>
+          <div class="btns">
+            <a class="btn" id="zConnect" href="#" target="_blank" rel="noopener">Connect Zid</a>
+            <button class="btn" id="zSync" type="button">Load products from Zid</button>
+          </div>
+          <div id="zMsg"></div>
+        </div>
+        <div class="panel">
+          <div><h2>Products</h2><p class="hint">Set which animal each product comes from, its fixed weight (leave empty if weighed per tray) and shelf life. Tick "Button" for products the butchers use most.</p></div>
+          <input id="prSearch" placeholder="Search products" autocomplete="off">
+          <div class="table-wrap"><table>
+            <thead><tr><th>Product</th><th>Barcode</th><th>Animal</th><th>Fixed kg</th><th>Shelf life (days)</th><th>Button</th><th>In use</th></tr></thead>
+            <tbody id="prRows"></tbody>
+          </table></div>
+          <p class="empty" id="prEmpty">No products yet. Load them from Zid or add one below.</p>
+          <form id="prAdd" class="row3" style="align-items:end">
+            <label>New product name<input id="prName" required></label>
+            <label>Barcode (optional)<input id="prBarcode"></label>
+            <button class="btn" type="submit">Add product</button>
+          </form>
+          <div id="prMsg"></div>
+        </div>
+        <div class="panel">
+          <h2>Labels and shop</h2>
+          <div class="row3">
+            <label>Label width (mm)<input id="stW" type="number" min="20" max="120"></label>
+            <label>Label height (mm)<input id="stH" type="number" min="15" max="120"></label>
+            <label>Warn days before use-by<input id="stWarn" type="number" min="0" max="14"></label>
+          </div>
+          <label>Time zone<input id="stTz" placeholder="Asia/Riyadh"></label>
+          <div class="btns"><button class="btn primary" id="stSave" type="button">Save</button><button class="btn" id="stTest" type="button">Print a test label</button></div>
+          <div id="stMsg"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

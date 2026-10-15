@@ -1,4 +1,4 @@
-// Data access for Carcass Trace. Every screen talks to the database through these functions.
+// Data access for The Meatrix. Every screen talks to the database through these functions.
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
@@ -60,6 +60,12 @@ export const api = {
   },
   async finishCarcass(id) { return check(await sb.rpc('finish_carcass', { p_id: id })); },
   async deleteCarcass(no) { return check(await sb.rpc('delete_carcass', { p_no: no })); },
+  async carcassYieldOne(id) { return check(await sb.from('carcass_yield').select('*').eq('id', id).maybeSingle()); },
+
+  // --- wastage ---
+  async recordWaste(carcassId, kind, weightKg) { return check(await sb.rpc('record_waste', { p_carcass_id: carcassId, p_kind: kind, p_weight_kg: weightKg })); },
+  async wasteForCarcass(carcassId) { return check(await sb.from('carcass_waste').select('*').eq('carcass_id', carcassId).order('recorded_at', { ascending: false })); },
+  async deleteWaste(id) { return check(await sb.rpc('delete_waste', { p_id: id })); },
 
   // --- trays ---
   async createTrays(productId, carcassIds, count, weightKg) {
@@ -68,6 +74,9 @@ export const api = {
   async traysForCarcass(carcassId) {
     const rows = check(await sb.from('tray_carcasses').select(`trays(${TRAY_WITH_CARCASSES})`).eq('carcass_id', carcassId));
     return rows.map(r => flattenTray(r.trays)).filter(Boolean).sort((a, b) => b.packed_at.localeCompare(a.packed_at));
+  },
+  async reproduceTrays(codes, productId, count, weightKg) {
+    return check(await sb.rpc('reproduce_trays', { p_codes: codes, p_product_id: productId, p_count: count, p_weight_kg: weightKg ?? null }));
   },
   async trayByCode(code) { return flattenTray(check(await sb.from('trays').select(TRAY_WITH_CARCASSES).eq('code', code).maybeSingle())); },
   async carcassesForOrder(ref) { return check(await sb.from('carcasses').select('*').eq('order_ref', ref)); },
@@ -78,6 +87,9 @@ export const api = {
   async inStockTrays() {
     return check(await sb.from('trays').select(TRAY_WITH_CARCASSES).eq('status', 'in_stock').order('use_by').limit(2000)).map(flattenTray);
   },
+
+  // --- live dashboard ---
+  async dashboard() { return check(await sb.rpc('dashboard')); },
 
   // --- sales ---
   async sellItems(codes, channel, orderRef, customer) {

@@ -19,6 +19,17 @@ export const api = {
   async signIn(email, password) { return check(await sb.auth.signInWithPassword({ email, password })); },
   async signOut() { await sb.auth.signOut(); },
 
+  // --- staff and roles ---
+  async myRole() {
+    const { data: { user } } = await sb.auth.getUser();
+    const row = user ? check(await sb.from('staff').select('role').eq('user_id', user.id).maybeSingle()) : null;
+    return { id: user?.id, role: row?.role || 'staff' };
+  },
+  async staffList() { return check(await sb.from('staff').select('*').order('created_at')); },
+  async setStaffRole(userId, role) { return check(await sb.rpc('set_staff_role', { p_user_id: userId, p_role: role })); },
+  async createStaff(email, password, role) { return this.zid('create_staff', { email, password, role }); },
+  async removeStaff(userId) { return this.zid('delete_staff', { user_id: userId }); },
+
   // --- settings ---
   async settings() { return check(await sb.from('settings').select('*').eq('id', 1).single()); },
   async saveSettings(patch) { return check(await sb.from('settings').update(patch).eq('id', 1).select().single()); },
@@ -47,7 +58,8 @@ export const api = {
     const rows = check(await sb.from('carcasses').select('farm, slaughterhouse').order('received_at', { ascending: false }).limit(300));
     return { farms: [...new Set(rows.map(r => r.farm).filter(Boolean))], slaughterhouses: [...new Set(rows.map(r => r.slaughterhouse).filter(Boolean))] };
   },
-  async finishCarcass(id) { return check(await sb.from('carcasses').update({ status: 'finished', finished_at: new Date().toISOString() }).eq('id', id)); },
+  async finishCarcass(id) { return check(await sb.rpc('finish_carcass', { p_id: id })); },
+  async deleteCarcass(no) { return check(await sb.rpc('delete_carcass', { p_no: no })); },
 
   // --- trays ---
   async createTrays(productId, carcassIds, count, weightKg) {

@@ -1,4 +1,4 @@
-// Carcass Trace: screens and workflow
+// The Meatrix (Marabina): screens and workflow
 import { printLabels } from './labels.js';
 
 const mod = window.CT_TEST_API ? { api: window.CT_TEST_API, configured: true } : await import('./api.js');
@@ -27,7 +27,7 @@ function onEnter(input, fn) {
 }
 const STATUS = {
   in_chiller: ['In chiller', ''], cutting: ['Cutting', 'warn'], finished: ['Finished', ''], sold_whole: ['Sold whole', 'accent'],
-  in_stock: ['In stock', 'good'], sold: ['Left shop', ''], written_off: ['Written off', 'bad']
+  in_stock: ['In stock', 'good'], sold: ['Left shop', ''], written_off: ['Written off', 'bad'], reproduced: ['Reproduced', 'accent']
 };
 const chip = s => { const v = STATUS[s] || [s, '']; return `<span class="chip ${v[1]}">${esc(v[0])}</span>`; };
 function useByChip(ymd) {
@@ -37,10 +37,20 @@ function useByChip(ymd) {
   return `<span class="chip">${showYmd(ymd)}</span>`;
 }
 const carcassNos = t => (t.carcasses || []).map(c => c.no);
+const WASTE = { trimmings: 'Trimmings', fat: 'Fat', bones: 'Bones', intestines: 'Intestines' };
+const pct = v => v == null ? '' : num(v).toFixed(1) + '%';
+// "22.0 kg received → 15.4 kg packed (70.0%) · 3.1 kg bones · 0.8 kg shrinkage (3.6%)"
+function breakdown(y) {
+  const parts = [`${kg(y.weight_kg, 1)} kg received → ${kg(y.packed_kg, 1)} kg packed (${pct(y.yield_pct)})`];
+  Object.keys(WASTE).forEach(k => { if (num(y[k + '_kg']) > 0) parts.push(`${kg(y[k + '_kg'], 1)} kg ${WASTE[k].toLowerCase()}`); });
+  if (y.shrink_kg != null) parts.push(`${kg(y.shrink_kg, 1)} kg shrinkage (${pct(y.shrink_pct)})`);
+  return parts.join(' · ');
+}
 
 const state = {
   settings: null, products: [], productsById: {}, me: { id: null, role: 'staff' },
-  cut: { active: [], product: null },
+  cut: { active: [], product: null, mode: 'cut', wasteKind: null },
+  repro: { items: [], product: null },
   pack: { order: null, items: [] },
   counter: { items: [] }
 };
@@ -70,7 +80,7 @@ async function enter(session) {
   document.body.classList.toggle('is-admin', isAdmin);
   $('whoRole').textContent = isAdmin ? 'Admin' : 'Staff';
   await loadProducts();
-  let tab = 'receive';
+  let tab = 'dash';
   try { tab = localStorage.getItem('ct_tab') || tab; } catch (_) {}
   showTab(tab);
 }
@@ -82,12 +92,13 @@ async function loadProducts() {
 /* ---------------- tabs ---------------- */
 const loaders = {};
 function showTab(name) {
-  if (!$('v-' + name) || (name === 'settings' && state.me.role !== 'admin')) name = 'receive';
+  if (!$('v-' + name) || (name === 'settings' && state.me.role !== 'admin')) name = 'dash';
+  state.tab = name;
   document.querySelectorAll('#nav button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   document.querySelectorAll('#app > section').forEach(s => { s.hidden = s.id !== 'v-' + name; });
   try { localStorage.setItem('ct_tab', name); } catch (_) {}
   if (loaders[name]) loaders[name]();
-  const focus = { cut: 'cScan', pack: state.pack.order ? 'pScan' : 'pOrderNo', counter: 'kScan', trace: 'tScan' }[name];
+  const focus = { cut: state.cut.mode === 'repro' ? 'xScan' : 'cScan', pack: state.pack.order ? 'pScan' : 'pOrderNo', counter: 'kScan', trace: 'tScan' }[name];
   if (focus) setTimeout(() => $(focus).focus(), 0);
 }
 $('nav').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) showTab(b.dataset.tab); });
@@ -161,6 +172,8 @@ async function pickCarcass(raw) {
 function renderCutActive() {
   const a = state.cut.active, el = $('cActive');
   $('cActiveBtns').hidden = !a.length; $('cFinish').hidden = a.length !== 1;
+  $('wPanel').hidden = a.length !== 1;
+  if (a.length === 1) loadWaste();
   if (!a.length) { el.className = 'empty'; el.textContent = 'No carcass selected.'; return; }
   el.className = 'active-card';
   if (a.length === 1) {
@@ -182,8 +195,13 @@ $('cBatch').addEventListener('change', () => {
 $('cClear').addEventListener('click', () => { state.cut.active = []; renderCutActive(); renderProducts(); renderCutTrays(); $('cScan').focus(); });
 $('cFinish').addEventListener('click', async () => {
   const c = state.cut.active[0]; if (!c) return;
-  try { await api.finishCarcass(c.id); msg($('cMsg'), `${c.no} marked finished. Scan the next carcass.`, 'ok'); state.cut.active = []; loaders.cut(); $('cScan').focus(); }
-  catch (err) { msg($('cMsg'), errText(err), 'err'); }
+  try {
+    await api.finishCarcass(c.id);
+    let line = '';
+    try { const y = await api.carcassYieldOne(c.id); if (y) line = ' ' + breakdown(y) + '.'; } catch (_) {}
+    msg($('cMsg'), `${c.no} finished.${line} Scan the next carcass.`, 'ok');
+    state.cut.active = []; loaders.cut(); $('cScan').focus();
+  } catch (err) { msg($('cMsg'), errText(err), 'err'); }
 });
 
 function productsForCut() {
@@ -278,6 +296,163 @@ $('cRows').addEventListener('click', async e => {
   catch (err) { msg($('cMsg'), errText(err), 'err'); }
 });
 
+/* ---------------- cutting room: wastage ---------------- */
+async function loadWaste() {
+  const c = state.cut.active[0]; if (!c) return;
+  try {
+    const rows = await api.wasteForCarcass(c.id);
+    if (state.cut.active[0]?.id !== c.id) return;
+    $('wRows').innerHTML = rows.map(w => `<tr><td>${esc(WASTE[w.kind] || w.kind)}</td><td class="num">${kg(w.weight_kg, 3)} kg</td><td class="hint">${when(w.recorded_at)}</td><td><button class="btn small danger admin-only" type="button" data-rm-waste="${esc(w.id)}">Delete</button></td></tr>`).join('');
+    const total = rows.reduce((s, w) => s + num(w.weight_kg), 0);
+    $('wTotal').textContent = rows.length ? `${kg(total)} kg wastage recorded for ${c.no}.` : `No wastage recorded for ${c.no} yet.`;
+  } catch (err) { msg($('wMsg'), errText(err), 'err'); }
+}
+function setWasteKind(k) {
+  state.cut.wasteKind = k;
+  document.querySelectorAll('#wKinds [data-kind]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.kind === k)));
+  $('wSave').disabled = !k; $('wSave').textContent = k ? `Record ${WASTE[k].toLowerCase()}` : 'Record wastage';
+  if (k) $('wWeight').focus();
+}
+$('wKinds').addEventListener('click', e => { const b = e.target.closest('[data-kind]'); if (b) setWasteKind(b.dataset.kind); });
+$('wPanel').addEventListener('submit', async e => {
+  e.preventDefault();
+  const c = state.cut.active[0], k = state.cut.wasteKind, w = num($('wWeight').value);
+  if (!c || !k) return;
+  if (!(w > 0)) { msg($('wMsg'), 'Enter the weight.', 'err'); $('wWeight').focus(); return; }
+  $('wSave').disabled = true;
+  try {
+    await api.recordWaste(c.id, k, w);
+    msg($('wMsg'), `Recorded ${kg(w, 3)} kg ${WASTE[k].toLowerCase()} for ${c.no}.`, 'ok');
+    $('wWeight').value = ''; setWasteKind(null); loadWaste();
+  } catch (err) { msg($('wMsg'), errText(err), 'err'); $('wSave').disabled = false; }
+});
+$('wRows').addEventListener('click', async e => {
+  const b = e.target.closest('[data-rm-waste]'); if (!b) return;
+  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Tap again'; return; }
+  try { await api.deleteWaste(b.dataset.rmWaste); msg($('wMsg'), 'Wastage entry deleted.', 'info'); loadWaste(); }
+  catch (err) { msg($('wMsg'), errText(err), 'err'); }
+});
+
+/* ---------------- cutting room: modes ---------------- */
+function setCutMode(m) {
+  state.cut.mode = m;
+  document.querySelectorAll('#cutModes [data-mode]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.mode === m)));
+  $('cutMain').hidden = m !== 'cut'; $('cutRepro').hidden = m !== 'repro';
+  if (m === 'repro') renderRepro();
+  setTimeout(() => $(m === 'repro' ? 'xScan' : 'cScan').focus(), 0);
+}
+$('cutModes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setCutMode(b.dataset.mode); });
+
+/* ---------------- cutting room: reproduce trays ---------------- */
+function renderRepro() {
+  const { items, product } = state.repro;
+  $('xEmpty').hidden = items.length > 0;
+  $('xRows').innerHTML = items.map((it, i) => `<tr><td class="code">${esc(it.code)}</td><td>${esc(it.label)}</td><td class="code">${it.carcasses.map(esc).join('<br>')}</td><td class="num">${kg(it.weight_kg, 3)}</td><td><button class="btn small" type="button" data-rm-x="${i}" aria-label="Remove">×</button></td></tr>`).join('');
+  const total = items.reduce((s, it) => s + num(it.weight_kg), 0);
+  $('xTotal').textContent = items.length ? `${items.length} tray(s), ${kg(total, 3)} kg going in.` : '';
+  const q = $('xProdSearch').value.trim().toLowerCase();
+  let list = state.products.filter(p => p.active);
+  if (q) list = list.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
+  else if (list.some(p => p.quick)) list = list.filter(p => p.quick);
+  $('xProducts').innerHTML = list.slice(0, 60).map(p => `<button type="button" data-xprod="${esc(p.id)}" aria-pressed="${p.id === product?.id}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`).join('');
+  $('xPrintBtn').disabled = !product || !items.length;
+  if (product) {
+    $('xSelTitle').textContent = product.name;
+    const oldest = items.map(i => i.use_by).filter(Boolean).sort()[0];
+    let useBy = addDays(product.shelf_life_days); if (oldest && oldest < useBy) useBy = oldest;
+    $('xSelInfo').textContent = `Use by ${showYmd(useBy)}${oldest && oldest === useBy ? ' (the oldest tray going in)' : ''}.`;
+    const n = Math.max(1, parseInt($('xCount').value, 10) || 1);
+    $('xPrintBtn').textContent = `Reproduce and print ${n} label${n === 1 ? '' : 's'}`;
+  } else { $('xSelTitle').textContent = 'Choose the new product'; $('xSelInfo').textContent = 'The use-by date is never later than the oldest tray going in.'; }
+}
+onEnter($('xScan'), async v => {
+  const items = state.repro.items;
+  if (items.some(i => i.code === v)) { msg($('xMsg'), `${v} is already scanned.`, 'warn'); return; }
+  try {
+    const it = await lookupItem(v);
+    if (it.kind !== 'tray') { msg($('xMsg'), 'Scan tray labels here, not carcass labels.', 'err'); return; }
+    items.push(it); msg($('xMsg'), `Added ${it.label}.`, 'ok'); $('xResult').innerHTML = ''; renderRepro();
+  } catch (err) { msg($('xMsg'), errText(err), 'err'); }
+});
+$('xRows').addEventListener('click', e => { const b = e.target.closest('[data-rm-x]'); if (!b) return; state.repro.items.splice(+b.dataset.rmX, 1); renderRepro(); $('xScan').focus(); });
+$('xProdSearch').addEventListener('input', renderRepro);
+$('xProdSearch').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const q = $('xProdSearch').value.trim();
+  const hit = state.products.find(p => p.active && (p.barcode === q || p.sku === q));
+  const list = state.products.filter(p => p.active && [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const p = hit || (list.length === 1 ? list[0] : null);
+  if (p) { $('xProdSearch').value = ''; selectReproProduct(p); } else msg($('xMsg'), `No single product matches "${q}".`, 'warn');
+});
+$('xProducts').addEventListener('click', e => { const b = e.target.closest('[data-xprod]'); if (b) selectReproProduct(state.productsById[b.dataset.xprod]); });
+function selectReproProduct(p) {
+  state.repro.product = p;
+  const total = state.repro.items.reduce((s, it) => s + num(it.weight_kg), 0);
+  if (p.fixed_weight_kg) { $('xWeight').value = Number(p.fixed_weight_kg); $('xCount').value = Math.max(1, Math.floor(total / num(p.fixed_weight_kg)) || 1); }
+  else { $('xWeight').value = total ? Number(total.toFixed(3)) : ''; $('xCount').value = 1; }
+  renderRepro(); $('xWeight').focus(); $('xWeight').select();
+}
+$('xCount').addEventListener('input', renderRepro);
+$('xPrintForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const { items, product } = state.repro;
+  if (!items.length) { msg($('xMsg'), 'Scan the trays going in first.', 'err'); $('xScan').focus(); return; }
+  if (!product) return;
+  const count = parseInt($('xCount').value, 10), weight = num($('xWeight').value);
+  if (!(count >= 1 && count <= 200)) { msg($('xResult'), 'Number of trays must be between 1 and 200.', 'err'); return; }
+  if (!(weight > 0)) { msg($('xResult'), 'Enter the tray weight.', 'err'); $('xWeight').focus(); return; }
+  $('xPrintBtn').disabled = true;
+  try {
+    const trays = await api.reproduceTrays(items.map(i => i.code), product.id, count, weight);
+    const carcasses = [...new Set(items.flatMap(i => i.carcasses))].map(no => ({ no }));
+    print(trays.map(t => ({ kind: 'tray', data: { ...t, carcasses } })));
+    const inKg = items.reduce((s, it) => s + num(it.weight_kg), 0), outKg = count * weight;
+    msg($('xResult'), `Made ${trays.length} × ${product.name} (${kg(outKg, 3)} kg) from ${items.length} tray(s) (${kg(inKg, 3)} kg). Labels sent to the printer.${inKg - outKg > 0.0005 ? ` ${kg(inKg - outKg, 3)} kg lost in reproduction counts as shrinkage.` : ''}`, 'ok');
+    state.repro = { items: [], product: null }; $('xCount').value = 1; $('xWeight').value = '';
+    renderRepro(); $('xScan').focus();
+  } catch (err) { msg($('xResult'), 'Could not reproduce: ' + errText(err), 'err'); $('xPrintBtn').disabled = false; }
+});
+
+/* ---------------- dashboard ---------------- */
+let dashBusy = false;
+loaders.dash = async () => {
+  if (dashBusy) return; dashBusy = true;
+  try {
+    const d = await api.dashboard();
+    const sum = (rows, f) => rows.reduce((s, r) => s + num(r[f]), 0);
+    const chillerKg = sum(d.chiller, 'weight_kg'), stockKg = sum(d.stock, 'kg');
+    const sold = d.left_today.filter(r => r.status === 'sold'), online = sold.filter(r => r.channel === 'online'), counter = sold.filter(r => r.channel === 'counter');
+    const tile = (big, label, cls = '') => `<div class="tile ${cls}"><b>${big}</b><span>${label}</span></div>`;
+    $('dTiles').innerHTML = [
+      tile(d.chiller.length, `carcasses in chiller · ${kg(chillerKg, 0)} kg`),
+      tile(sum(d.received_today, 'n'), `received today · ${kg(sum(d.received_today, 'kg'), 0)} kg`),
+      tile(sum(d.produced_today, 'trays'), `trays produced today · ${kg(sum(d.produced_today, 'kg'), 1)} kg`),
+      tile(sum(d.stock, 'trays'), `trays in stock · ${kg(stockKg, 1)} kg`),
+      tile(sum(online, 'trays'), `trays sent online today`),
+      tile(sum(counter, 'trays'), `trays sold at the counter today`),
+      tile(kg(sum(d.waste_today, 'kg'), 1), 'kg wastage today'),
+      tile(sum(d.stock, 'expiring_soon'), 'trays expiring soon', sum(d.stock, 'expiring_soon') ? 'warn' : ''),
+      tile(sum(d.stock, 'expired'), 'trays expired', sum(d.stock, 'expired') ? 'bad' : '')
+    ].join('');
+    const hrs = h => num(h) < 24 ? `${Math.round(num(h))} h` : `${(num(h) / 24).toFixed(1)} days`;
+    $('dChillerEmpty').hidden = d.chiller.length > 0;
+    $('dChiller').innerHTML = d.chiller.map(c => `<tr class="click" data-trace="${esc(c.no)}"><td class="code">${esc(c.no)}</td><td>${esc(c.species)}</td><td>${esc(c.farm || '')}</td><td class="num">${kg(c.weight_kg, 1)}</td><td class="num">${hrs(c.hours)}</td><td class="num">${kg(c.packed_kg, 1)}</td><td class="num">${kg(c.waste_kg, 1)}</td><td>${chip(c.status)}</td></tr>`).join('');
+    $('dProducedEmpty').hidden = d.produced_today.length > 0;
+    $('dProduced').innerHTML = d.produced_today.map(r => `<tr><td>${esc(r.product_name)}</td><td class="num">${r.trays}</td><td class="num">${kg(r.kg, 1)}</td></tr>`).join('');
+    $('dStockEmpty').hidden = d.stock.length > 0;
+    $('dStock').innerHTML = d.stock.map(r => `<tr><td>${esc(r.product_name)}</td><td class="num">${r.trays}</td><td class="num">${kg(r.kg, 1)}</td><td>${useByChip(r.oldest_use_by)}</td><td class="num">${r.days_left < 0 ? `<span class="chip bad">${r.days_left}</span>` : r.days_left}</td><td class="num">${r.expiring_soon ? `<span class="chip warn">${r.expiring_soon}</span>` : 0}</td><td class="num">${r.expired ? `<span class="chip bad">${r.expired}</span>` : 0}</td></tr>`).join('');
+    $('dYieldEmpty').hidden = d.yield_30d.length > 0;
+    $('dYield').innerHTML = d.yield_30d.map(r => `<tr><td>${esc(r.species)}</td><td class="num">${r.n}</td><td class="num">${kg(r.kg, 1)}</td><td class="num">${pct(r.yield_pct)}</td><td class="num">${pct(r.waste_pct)}</td><td class="num">${pct(r.shrink_pct)}</td></tr>`).join('');
+    $('dWasteEmpty').hidden = d.waste_today.length > 0;
+    $('dWaste').innerHTML = d.waste_today.map(r => `<tr><td>${esc(WASTE[r.kind] || r.kind)}</td><td class="num">${kg(r.kg, 2)}</td></tr>`).join('');
+    $('dUpdated').textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · refreshes every 30 seconds`;
+    msg($('dMsg'), '');
+  } catch (err) { msg($('dMsg'), errText(err), 'err'); }
+  dashBusy = false;
+};
+setInterval(() => { if (state.tab === 'dash' && !document.hidden && !$('app').hidden) loaders.dash(); }, 30000);
+
 /* ---------------- scanning trays out (shared by packing and counter) ---------------- */
 async function lookupItem(raw) {
   const code = raw.trim();
@@ -285,6 +460,7 @@ async function lookupItem(raw) {
   if (t) {
     if (t.status === 'sold') throw new Error(`Tray ${code} already left on order ${t.order_ref}.`);
     if (t.status === 'written_off') throw new Error(`Tray ${code} was taken out of stock (${t.write_off_reason}).`);
+    if (t.status === 'reproduced') throw new Error(`Tray ${code} was reproduced (${t.write_off_reason}). Scan the new tray instead.`);
     return { kind: 'tray', code: t.code, product_id: t.product_id, label: t.product_name, carcasses: carcassNos(t), weight_kg: t.weight_kg, use_by: t.use_by };
   }
   const c = await api.carcassByNo(code.toUpperCase());
@@ -470,16 +646,17 @@ function renderYield() {
   const sp = $('ySpecies').value;
   const rows = yieldRows.filter(r => !sp || r.species === sp);
   $('yEmpty').hidden = rows.length > 0;
-  $('yRows').innerHTML = rows.map(r => `<tr class="click" data-trace="${esc(r.no)}"><td class="code">${esc(r.no)}</td><td>${esc(r.species)}</td><td>${esc(r.ear_tag)}</td><td>${esc(r.farm)}</td><td class="num">${kg(r.weight_kg, 1)}</td><td class="num">${kg(r.packed_kg, 1)}</td><td class="num">${r.yield_pct == null ? '' : num(r.yield_pct).toFixed(1) + '%'}</td><td class="num">${r.trays_in_stock}</td><td class="num">${r.trays_sold}</td><td>${chip(r.status)}</td></tr>`).join('');
+  $('yRows').innerHTML = rows.map(r => `<tr class="click" data-trace="${esc(r.no)}"><td class="code">${esc(r.no)}</td><td>${esc(r.species)}</td><td>${esc(r.ear_tag)}</td><td>${esc(r.farm)}</td><td class="num">${kg(r.weight_kg, 1)}</td><td class="num">${kg(r.packed_kg, 1)}</td><td class="num">${r.yield_pct == null ? '' : num(r.yield_pct).toFixed(1) + '%'}</td><td class="num">${kg(r.waste_kg, 1)}</td><td class="num">${r.shrink_kg == null ? '' : `${kg(r.shrink_kg, 1)} kg · ${pct(r.shrink_pct)}`}</td><td class="num">${r.trays_in_stock}</td><td class="num">${r.trays_sold}</td><td>${chip(r.status)}</td></tr>`).join('');
   const groups = {};
   rows.filter(r => r.status === 'finished').forEach(r => {
     const k = (r.farm || 'Not recorded') + '|' + r.species;
-    (groups[k] = groups[k] || { farm: r.farm || 'Not recorded', species: r.species, n: 0, kg: 0, y: 0 });
+    (groups[k] = groups[k] || { farm: r.farm || 'Not recorded', species: r.species, n: 0, kg: 0, y: 0, w: 0, s: 0 });
     groups[k].n++; groups[k].kg += num(r.weight_kg); groups[k].y += num(r.yield_pct);
+    groups[k].w += num(r.weight_kg) ? num(r.waste_kg) / num(r.weight_kg) * 100 : 0; groups[k].s += num(r.shrink_pct);
   });
   const g = Object.values(groups).sort((a, b) => b.y / b.n - a.y / a.n);
   $('yFarmsEmpty').hidden = g.length > 0;
-  $('yFarms').innerHTML = g.map(x => `<tr><td>${esc(x.farm)}</td><td>${esc(x.species)}</td><td class="num">${x.n}</td><td class="num">${kg(x.kg / x.n, 1)}</td><td class="num">${(x.y / x.n).toFixed(1)}%</td></tr>`).join('');
+  $('yFarms').innerHTML = g.map(x => `<tr><td>${esc(x.farm)}</td><td>${esc(x.species)}</td><td class="num">${x.n}</td><td class="num">${kg(x.kg / x.n, 1)}</td><td class="num">${(x.y / x.n).toFixed(1)}%</td><td class="num">${(x.w / x.n).toFixed(1)}%</td><td class="num">${(x.s / x.n).toFixed(1)}%</td></tr>`).join('');
 }
 $('ySpecies').addEventListener('change', renderYield);
 
@@ -487,11 +664,12 @@ $('ySpecies').addEventListener('change', renderYield);
 onEnter($('tScan'), v => { $('tScan').value = v; runTrace(v); });
 const orderLink = ref => ref ? `<a href="#" data-trace="${esc(ref)}" class="code">${esc(ref)}</a>` : '';
 async function carcassBlock(c) {
-  const trays = await api.traysForCarcass(c.id);
-  const packed = trays.reduce((s, t) => s + num(t.weight_kg) / Math.max(1, (t.carcasses || []).length), 0);
+  const [trays, y, waste] = await Promise.all([api.traysForCarcass(c.id), api.carcassYieldOne(c.id).catch(() => null), api.wasteForCarcass(c.id).catch(() => [])]);
+  const live = trays.filter(t => t.status !== 'reproduced');
+  const packed = live.reduce((s, t) => s + num(t.weight_kg) / Math.max(1, (t.carcasses || []).length), 0);
   const orders = [...new Set([...trays.map(t => t.order_ref), c.order_ref].filter(Boolean))];
   const byProduct = {};
-  trays.forEach(t => { const p = byProduct[t.product_name] = byProduct[t.product_name] || { n: 0, kg: 0, stock: 0 }; p.n++; p.kg += num(t.weight_kg) / Math.max(1, (t.carcasses || []).length); if (t.status === 'in_stock') p.stock++; });
+  live.forEach(t => { const p = byProduct[t.product_name] = byProduct[t.product_name] || { n: 0, kg: 0, stock: 0 }; p.n++; p.kg += num(t.weight_kg) / Math.max(1, (t.carcasses || []).length); if (t.status === 'in_stock') p.stock++; });
   return `<div class="grid" style="margin-bottom:18px">
     <div class="panel">
       <div class="chain"><span class="chip">Farm: ${esc(c.farm || '?')}</span>→<span class="chip">Slaughterhouse: ${esc(c.slaughterhouse || '?')}${c.kill_no ? ' #' + esc(c.kill_no) : ''}</span>→<span class="chip accent code">${esc(c.no)}</span></div>
@@ -500,7 +678,9 @@ async function carcassBlock(c) {
         <dt>Animal</dt><dd>${esc(c.species)}</dd><dt>Ear tag</dt><dd class="code">${esc(c.ear_tag || '–')}</dd>
         <dt>Farm</dt><dd>${esc(c.farm || '–')}</dd><dt>Slaughterhouse</dt><dd>${esc(c.slaughterhouse || '–')}</dd><dt>Kill no.</dt><dd>${esc(c.kill_no || '–')}</dd>
         <dt>Received</dt><dd>${when(c.received_at)} · ${kg(c.weight_kg, 1)} kg</dd><dt>Status</dt><dd>${chip(c.status)}</dd>
-        <dt>Packed</dt><dd>${kg(packed)} kg in ${trays.length} trays${num(c.weight_kg) ? ` · ${(packed / num(c.weight_kg) * 100).toFixed(1)}% yield` : ''}</dd>
+        <dt>Packed</dt><dd>${kg(packed)} kg in ${live.length} trays${num(c.weight_kg) ? ` · ${(packed / num(c.weight_kg) * 100).toFixed(1)}% yield` : ''}</dd>
+        <dt>Wastage</dt><dd>${waste.length ? waste.map(w => `${kg(w.weight_kg, 2)} kg ${esc((WASTE[w.kind] || w.kind).toLowerCase())}`).join(' · ') : '–'}</dd>
+        <dt>Shrinkage</dt><dd>${y && y.shrink_kg != null ? `${kg(y.shrink_kg, 2)} kg (${pct(y.shrink_pct)})` : 'Worked out when the carcass is finished'}</dd>
         <dt>Orders</dt><dd>${orders.length ? orders.map(orderLink).join(', ') : '–'}</dd>
       </dl>
       ${Object.keys(byProduct).length ? `<div class="table-wrap"><table><thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th class="num">In stock</th></tr></thead><tbody>${Object.entries(byProduct).map(([n, p]) => `<tr><td>${esc(n)}</td><td class="num">${p.n}</td><td class="num">${kg(p.kg)}</td><td class="num">${p.stock}</td></tr>`).join('')}</tbody></table></div>` : ''}
@@ -516,7 +696,7 @@ async function runTrace(q) {
   try {
     const t = await api.trayByCode(q);
     if (t) {
-      let html = `<div class="panel" style="margin-bottom:18px"><h3>Tray</h3><span class="big-code">${esc(t.code)}</span><dl class="kv"><dt>Product</dt><dd>${esc(t.product_name)}</dd><dt>Weight</dt><dd>${kg(t.weight_kg, 3)} kg</dd><dt>Packed</dt><dd>${when(t.packed_at)}</dd><dt>Use by</dt><dd>${showYmd(t.use_by)}</dd><dt>Status</dt><dd>${chip(t.status)} ${t.order_ref ? 'on order ' + orderLink(t.order_ref) + ' · ' + when(t.sold_at) : ''}${t.write_off_reason ? esc(t.write_off_reason) : ''}</dd><dt>From</dt><dd class="code">${carcassNos(t).map(esc).join(', ')}</dd></dl></div>`;
+      let html = `<div class="panel" style="margin-bottom:18px"><h3>Tray</h3><span class="big-code">${esc(t.code)}</span><dl class="kv"><dt>Product</dt><dd>${esc(t.product_name)}</dd><dt>Weight</dt><dd>${kg(t.weight_kg, 3)} kg</dd><dt>Packed</dt><dd>${when(t.packed_at)}</dd><dt>Use by</dt><dd>${showYmd(t.use_by)}</dd><dt>Status</dt><dd>${chip(t.status)} ${t.order_ref ? 'on order ' + orderLink(t.order_ref) + ' · ' + when(t.sold_at) : ''}${t.write_off_reason ? esc(t.write_off_reason) : ''}</dd><dt>From</dt><dd class="code">${carcassNos(t).map(esc).join(', ')}</dd>${t.made_from ? `<dt>Reproduced from</dt><dd>${t.made_from.map(x => `<a href="#" class="code" data-trace="${esc(x)}">${esc(x)}</a>`).join(', ')}</dd>` : ''}</dl></div>`;
       for (const c of t.carcasses) html += await carcassBlock(await api.carcassByNo(c.no));
       out.innerHTML = html; return;
     }

@@ -39,7 +39,7 @@ function useByChip(ymd) {
 const carcassNos = t => (t.carcasses || []).map(c => c.no);
 
 const state = {
-  settings: null, products: [], productsById: {},
+  settings: null, products: [], productsById: {}, me: { id: null, role: 'staff' },
   cut: { active: [], product: null },
   pack: { order: null, items: [] },
   counter: { items: [] }
@@ -65,6 +65,10 @@ async function enter(session) {
   show('app');
   $('who').hidden = false; $('whoEmail').textContent = session?.user?.email || '';
   state.settings = await api.settings();
+  try { state.me = await api.myRole(); } catch (_) { state.me = { id: null, role: 'staff' }; }
+  const isAdmin = state.me.role === 'admin';
+  document.body.classList.toggle('is-admin', isAdmin);
+  $('whoRole').textContent = isAdmin ? 'Admin' : 'Staff';
   await loadProducts();
   let tab = 'receive';
   try { tab = localStorage.getItem('ct_tab') || tab; } catch (_) {}
@@ -78,7 +82,7 @@ async function loadProducts() {
 /* ---------------- tabs ---------------- */
 const loaders = {};
 function showTab(name) {
-  if (!$('v-' + name)) name = 'receive';
+  if (!$('v-' + name) || (name === 'settings' && state.me.role !== 'admin')) name = 'receive';
   document.querySelectorAll('#nav button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
   document.querySelectorAll('#app > section').forEach(s => { s.hidden = s.id !== 'v-' + name; });
   try { localStorage.setItem('ct_tab', name); } catch (_) {}
@@ -258,7 +262,7 @@ async function renderCutTrays() {
     let trays = await api.traysForCarcass(a[0].id);
     if (a.length > 1) { const key = a.map(c => c.no).sort().join(','); trays = trays.filter(t => carcassNos(t).sort().join(',') === key); }
     $('cRowsEmpty').hidden = trays.length > 0; $('cRowsEmpty').textContent = 'No trays yet.';
-    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
+    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger admin-only" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
     if (a.length === 1) {
       const packed = trays.reduce((s, t) => s + num(t.weight_kg) / Math.max(1, (t.carcasses || []).length), 0);
       $('cYield').textContent = `${trays.length} trays · ${kg(packed)} kg packed from ${kg(a[0].weight_kg, 1)} kg received · ${Math.round(packed / num(a[0].weight_kg) * 100)}% yield so far`;
@@ -410,8 +414,14 @@ $('kConfirm').addEventListener('click', async () => {
   const items = state.counter.items; if (!items.length) return;
   $('kConfirm').disabled = true;
   try {
-    const o = await api.sellItems(items.map(i => i.code), 'counter', $('kReceipt').value.trim(), null);
-    msgHtml($('kResult'), `<strong>Sale ${esc(o.ref)} recorded.</strong> <span class="code">${esc(o.trace_summary)}</span>`, 'ok');
+    const ref = $('kReceipt').value.trim();
+    const o = await api.sellItems(items.map(i => i.code), 'counter', ref, null);
+    let zidLine = '';
+    if (ref) {
+      try { await api.zid('post_comment', { order_ref: o.ref }); zidLine = ' Added to the Zid order.'; }
+      catch (err) { zidLine = ` Could not add it to the Zid order (${esc(errText(err))}).`; }
+    }
+    msgHtml($('kResult'), `<strong>Sale ${esc(o.ref)} recorded.${zidLine}</strong> <span class="code">${esc(o.trace_summary)}</span>`, ref && !zidLine.startsWith(' Could') ? 'ok' : (ref ? 'warn' : 'ok'));
     state.counter.items = []; $('kReceipt').value = ''; renderCounter(); loaders.counter(); $('kScan').focus();
   } catch (err) { msg($('kMsg'), 'Could not record: ' + errText(err), 'err'); $('kConfirm').disabled = false; }
 });
@@ -496,6 +506,7 @@ async function carcassBlock(c) {
       ${Object.keys(byProduct).length ? `<div class="table-wrap"><table><thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th class="num">In stock</th></tr></thead><tbody>${Object.entries(byProduct).map(([n, p]) => `<tr><td>${esc(n)}</td><td class="num">${p.n}</td><td class="num">${kg(p.kg)}</td><td class="num">${p.stock}</td></tr>`).join('')}</tbody></table></div>` : ''}
     </div>
     <div class="panel"><h3>Trays from this carcass</h3>
+      <div class="btns admin-only" style="margin-bottom:8px"><button class="btn small danger" type="button" data-del-carcass="${esc(c.no)}">Delete carcass ${esc(c.no)}</button></div>
       ${trays.length ? `<div class="table-wrap"><table><thead><tr><th>Tray</th><th>Product</th><th class="num">kg</th><th>Use by</th><th>Status</th></tr></thead><tbody>${trays.map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ` <span class="chip">batch of ${carcassNos(t).length}</span>` : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)} ${orderLink(t.order_ref)}${t.write_off_reason ? ` <span class="hint">${esc(t.write_off_reason)}</span>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="empty">No trays from this carcass yet.</p>'}
     </div></div>`;
 }
@@ -529,12 +540,23 @@ async function runTrace(q) {
   } catch (err) { out.innerHTML = `<div class="msg err">${esc(errText(err))}</div>`; }
 }
 
+$('tOut').addEventListener('click', async e => {
+  const b = e.target.closest('[data-del-carcass]'); if (!b) return;
+  const no = b.dataset.delCarcass;
+  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = `Tap again to delete ${no} and its trays`; return; }
+  try {
+    const n = await api.deleteCarcass(no);
+    $('tOut').innerHTML = `<div class="msg ok">${esc(no)} deleted, with ${n} tray(s) made only from it.</div>`;
+  } catch (err) { $('tOut').insertAdjacentHTML('afterbegin', `<div class="msg err">${esc(errText(err))}</div>`); }
+});
+
 /* ---------------- settings ---------------- */
 loaders.settings = async () => {
   const s = state.settings;
   $('stW').value = s.label_width_mm; $('stH').value = s.label_height_mm; $('stWarn').value = s.expiry_warning_days; $('stTz').value = s.timezone;
   $('zConnect').href = api.zidConnectUrl ? api.zidConnectUrl() : '#';
   renderProductSettings();
+  loadStaff();
   try {
     const z = await api.zid('status');
     $('zStatus').textContent = z.connected ? `Connected${z.updated_at ? ' since ' + when(z.updated_at) : ''}.` : 'Not connected yet. Press "Connect Zid" and approve the app in Zid.';
@@ -581,6 +603,37 @@ $('zSync').addEventListener('click', async () => {
   catch (err) { msg($('zMsg'), 'Zid: ' + errText(err), 'err'); }
   $('zSync').disabled = false;
 });
+async function loadStaff() {
+  try {
+    const rows = await api.staffList();
+    $('stfRows').innerHTML = rows.map(r => `<tr data-uid="${esc(r.user_id)}"><td>${esc(r.email || '')}</td>
+      <td><select data-role aria-label="Role"><option value="staff" ${r.role === 'staff' ? 'selected' : ''}>Staff</option><option value="admin" ${r.role === 'admin' ? 'selected' : ''}>Admin</option></select></td>
+      <td>${r.user_id === state.me.id ? '<span class="hint">You</span>' : '<button class="btn small danger" type="button" data-rm-staff>Remove</button>'}</td></tr>`).join('');
+  } catch (err) { msg($('stfMsg'), errText(err), 'err'); }
+}
+$('stfRows').addEventListener('change', async e => {
+  const sel = e.target.closest('[data-role]'), tr = e.target.closest('[data-uid]'); if (!sel || !tr) return;
+  try { await api.setStaffRole(tr.dataset.uid, sel.value); msg($('stfMsg'), 'Role saved.', 'ok'); }
+  catch (err) { msg($('stfMsg'), errText(err), 'err'); }
+  loadStaff();
+});
+$('stfRows').addEventListener('click', async e => {
+  const b = e.target.closest('[data-rm-staff]'), tr = e.target.closest('[data-uid]'); if (!b || !tr) return;
+  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Tap again to remove'; return; }
+  try { await api.removeStaff(tr.dataset.uid); msg($('stfMsg'), 'Login removed.', 'ok'); }
+  catch (err) { msg($('stfMsg'), errText(err), 'err'); }
+  loadStaff();
+});
+$('stfAdd').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    const r = await api.createStaff($('stfEmail').value.trim(), $('stfPass').value, $('stfRole').value);
+    msg($('stfMsg'), `Added ${r.email} as ${r.role}. They can sign in now.`, 'ok');
+    $('stfEmail').value = ''; $('stfPass').value = '';
+  } catch (err) { msg($('stfMsg'), errText(err), 'err'); }
+  loadStaff();
+});
+
 $('stSave').addEventListener('click', async () => {
   try {
     state.settings = await api.saveSettings({

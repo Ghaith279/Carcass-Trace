@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Carcass Trace</title>
+<title>The Meatrix · Marabina</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
@@ -12,7 +12,7 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>Carcass <span>Trace</span></h1>
+    <h1 class="brand"><span class="logo" role="img" aria-label="Marabina"></span><span class="appname">The Meatrix<small>Every cut is under surveillance.</small></span></h1>
     <div class="who" id="who" hidden><span id="whoEmail"></span> <span id="whoRole" class="chip"></span><button class="btn small" id="signOut" type="button">Sign out</button></div>
   </header>
 
@@ -34,6 +34,7 @@
 
   <div id="app" hidden>
     <nav role="tablist" id="nav">
+      <button role="tab" data-tab="dash">Dashboard</button>
       <button role="tab" data-tab="receive">Receive</button>
       <button role="tab" data-tab="cut">Cutting room</button>
       <button role="tab" data-tab="pack">Online packing</button>
@@ -43,6 +44,62 @@
       <button role="tab" data-tab="trace">Trace</button>
       <button role="tab" data-tab="settings" class="admin-only">Settings</button>
     </nav>
+
+    <!-- DASHBOARD -->
+    <section id="v-dash" hidden>
+      <div class="stack">
+        <div class="panel">
+          <div class="bar"><h2>Shop right now</h2><span class="hint" id="dUpdated"></span></div>
+          <div class="tiles" id="dTiles"></div>
+          <div id="dMsg"></div>
+        </div>
+        <div class="grid2">
+          <div class="panel">
+            <h2>In the chiller and being cut</h2>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Carcass</th><th>Animal</th><th>Farm</th><th class="num">kg</th><th class="num">In chiller</th><th class="num">Packed</th><th class="num">Wastage</th><th>Status</th></tr></thead>
+              <tbody id="dChiller"></tbody>
+            </table></div>
+            <p class="empty" id="dChillerEmpty">The chiller is empty.</p>
+          </div>
+          <div class="panel">
+            <h2>Produced today</h2>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th></tr></thead>
+              <tbody id="dProduced"></tbody>
+            </table></div>
+            <p class="empty" id="dProducedEmpty">Nothing produced yet today.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>What is left, and shelf life</h2>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th>Oldest use-by</th><th class="num">Days left</th><th class="num">Expiring soon</th><th class="num">Expired</th></tr></thead>
+            <tbody id="dStock"></tbody>
+          </table></div>
+          <p class="empty" id="dStockEmpty">No trays in stock.</p>
+        </div>
+        <div class="grid2">
+          <div class="panel">
+            <h2>Yield, last 30 days</h2>
+            <p class="hint">Finished carcasses. Shrinkage = received − packed − wastage.</p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg kg</th><th class="num">Yield</th><th class="num">Wastage</th><th class="num">Shrinkage</th></tr></thead>
+              <tbody id="dYield"></tbody>
+            </table></div>
+            <p class="empty" id="dYieldEmpty">No finished carcasses in the last 30 days.</p>
+          </div>
+          <div class="panel">
+            <h2>Wastage today</h2>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Type</th><th class="num">kg</th></tr></thead>
+              <tbody id="dWaste"></tbody>
+            </table></div>
+            <p class="empty" id="dWasteEmpty">No wastage recorded today.</p>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- RECEIVE -->
     <section id="v-receive" class="grid" hidden>
@@ -74,7 +131,12 @@
     </section>
 
     <!-- CUTTING ROOM -->
-    <section id="v-cut" class="grid" hidden>
+    <section id="v-cut" hidden>
+      <div class="seg" role="tablist" id="cutModes">
+        <button type="button" role="tab" data-mode="cut" aria-selected="true">Cut a carcass</button>
+        <button type="button" role="tab" data-mode="repro" aria-selected="false">Reproduce trays</button>
+      </div>
+      <div class="grid" id="cutMain">
       <div class="stack">
         <div class="panel">
           <div><h2>Carcass on the block</h2><p class="hint">Scan the carcass label. One carcass at a time.</p></div>
@@ -93,6 +155,22 @@
           <div class="products" id="cProducts"></div>
           <p class="empty" id="cProdEmpty" hidden>No products for this animal. Add them in Settings.</p>
         </div>
+        <form class="panel" id="wPanel" hidden>
+          <div><h2>Wastage</h2><p class="hint">Weigh it and record it any time while cutting. Shrinkage is worked out when the carcass is finished.</p></div>
+          <div class="kinds" id="wKinds">
+            <button type="button" data-kind="trimmings" aria-pressed="false">Trimmings</button>
+            <button type="button" data-kind="fat" aria-pressed="false">Fat</button>
+            <button type="button" data-kind="bones" aria-pressed="false">Bones</button>
+            <button type="button" data-kind="intestines" aria-pressed="false">Intestines</button>
+          </div>
+          <div class="row2" style="align-items:end">
+            <label>Weight (kg)<input id="wWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
+            <button class="btn primary" type="submit" id="wSave" disabled>Record wastage</button>
+          </div>
+          <div id="wMsg"></div>
+          <div class="table-wrap"><table><tbody id="wRows"></tbody></table></div>
+          <p class="hint" id="wTotal"></p>
+        </form>
       </div>
       <div class="stack">
         <form class="panel" id="cPrintForm">
@@ -113,6 +191,39 @@
             <tbody id="cRows"></tbody>
           </table></div>
           <p class="empty" id="cRowsEmpty">Select a carcass to see its trays.</p>
+        </div>
+      </div>
+      </div>
+      <div class="grid" id="cutRepro" hidden>
+        <div class="stack">
+          <div class="panel">
+            <div><h2>Trays going in</h2><p class="hint">Scan each tray you are turning into another product, for example steak into mince. They leave stock, and the new trays keep their carcass numbers.</p></div>
+            <input class="scan" id="xScan" placeholder="Scan tray label" autocomplete="off">
+            <div id="xMsg"></div>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
+              <tbody id="xRows"></tbody>
+            </table></div>
+            <p class="empty" id="xEmpty">Scan the first tray.</p>
+            <p class="hint" id="xTotal"></p>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="panel">
+            <div><h2>New product</h2><p class="hint">Tap a product, scan its barcode, or search.</p></div>
+            <input id="xProdSearch" placeholder="Search or scan product barcode" autocomplete="off">
+            <div class="products" id="xProducts"></div>
+          </div>
+          <form class="panel" id="xPrintForm">
+            <h2 id="xSelTitle">Choose the new product</h2>
+            <p class="hint" id="xSelInfo">The use-by date is never later than the oldest tray going in.</p>
+            <div class="row2">
+              <label>Weight per tray (kg)<input id="xWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
+              <label>Number of trays<input id="xCount" type="number" min="1" max="200" value="1" inputmode="numeric"></label>
+            </div>
+            <button class="btn primary big" type="submit" id="xPrintBtn" disabled>Reproduce and print</button>
+            <div id="xResult"></div>
+          </form>
         </div>
       </div>
     </section>
@@ -208,9 +319,9 @@
       <div class="stack">
         <div class="panel">
           <h2>Average yield by farm</h2>
-          <p class="hint">Finished carcasses only. Yield = kg packed into trays ÷ kg received.</p>
+          <p class="hint">Finished carcasses only. Yield = kg packed into trays ÷ kg received. Shrinkage = received − packed − wastage.</p>
           <div class="table-wrap"><table>
-            <thead><tr><th>Farm</th><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg received kg</th><th class="num">Avg yield</th></tr></thead>
+            <thead><tr><th>Farm</th><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg received kg</th><th class="num">Avg yield</th><th class="num">Avg wastage</th><th class="num">Avg shrinkage</th></tr></thead>
             <tbody id="yFarms"></tbody>
           </table></div>
           <p class="empty" id="yFarmsEmpty">No finished carcasses yet.</p>
@@ -221,7 +332,7 @@
             <select id="ySpecies" style="width:auto"><option value="">All animals</option><option>Sheep</option><option>Beef</option><option>Camel</option></select>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">Received kg</th><th class="num">Packed kg</th><th class="num">Yield</th><th class="num">In stock</th><th class="num">Sold</th><th>Status</th></tr></thead>
+            <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">Received kg</th><th class="num">Packed kg</th><th class="num">Yield</th><th class="num">Wastage kg</th><th class="num">Shrinkage</th><th class="num">In stock</th><th class="num">Sold</th><th>Status</th></tr></thead>
             <tbody id="yRows"></tbody>
           </table></div>
           <p class="empty" id="yEmpty">No carcasses yet.</p>

@@ -13,7 +13,7 @@
 <div class="wrap">
   <header>
     <h1>Carcass <span>Trace</span></h1>
-    <div class="who" id="who" hidden><span id="whoEmail"></span><button class="btn small" id="signOut" type="button">Sign out</button></div>
+    <div class="who" id="who" hidden><span id="whoEmail"></span> <span id="whoRole" class="chip"></span><button class="btn small" id="signOut" type="button">Sign out</button></div>
   </header>
 
   <!-- Not configured -->
@@ -41,7 +41,7 @@
       <button role="tab" data-tab="stock">Stock</button>
       <button role="tab" data-tab="carcasses">Carcasses &amp; yield</button>
       <button role="tab" data-tab="trace">Trace</button>
-      <button role="tab" data-tab="settings">Settings</button>
+      <button role="tab" data-tab="settings" class="admin-only">Settings</button>
     </nav>
 
     <!-- RECEIVE -->
@@ -166,7 +166,7 @@
           <tbody id="kRows"></tbody>
         </table></div>
         <p class="empty" id="kEmpty">Scan a tray to start.</p>
-        <label>POS receipt number (optional)<input id="kReceipt" autocomplete="off"></label>
+        <label>Zid order number from the POS (optional, adds the carcass numbers to that order in Zid)<input id="kReceipt" autocomplete="off"></label>
         <button class="btn primary big" id="kConfirm" type="button" disabled>Confirm sale</button>
         <div id="kResult"></div>
       </div>
@@ -194,7 +194,7 @@
             <tbody id="sTrays"></tbody>
           </table></div>
           <p class="empty" id="sTraysEmpty">Nothing here.</p>
-          <div class="btns" style="align-items:center">
+          <div class="btns admin-only" style="align-items:center">
             <select id="sReason" style="width:auto"><option>Expired</option><option>Damaged</option><option>Missing at stock check</option><option>Used in shop</option><option>Other</option></select>
             <button class="btn danger" id="sWriteOff" type="button" disabled>Take selected out of stock</button>
           </div>
@@ -264,6 +264,20 @@
             <button class="btn" type="submit">Add product</button>
           </form>
           <div id="prMsg"></div>
+        </div>
+        <div class="panel">
+          <div><h2>Staff logins</h2><p class="hint">Admins can change settings and products, delete labels and carcasses, and take trays out of stock. Staff can do the daily work only.</p></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
+            <tbody id="stfRows"></tbody>
+          </table></div>
+          <form id="stfAdd" class="row3" style="align-items:end">
+            <label>Email<input id="stfEmail" type="email" required autocomplete="off"></label>
+            <label>Password (8+ characters)<input id="stfPass" type="text" minlength="8" required autocomplete="off"></label>
+            <label>Role<select id="stfRole"><option value="staff">Staff</option><option value="admin">Admin</option></select></label>
+            <button class="btn" type="submit">Add login</button>
+          </form>
+          <div id="stfMsg"></div>
         </div>
         <div class="panel">
           <h2>Labels and shop</h2>

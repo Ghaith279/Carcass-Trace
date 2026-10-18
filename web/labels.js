@@ -3,11 +3,9 @@
 // To skip the dialog entirely, start Chrome with --kiosk-printing (see README).
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-const dm = d => { const x = new Date(d); return `${String(x.getDate()).padStart(2, '0')}/${String(x.getMonth() + 1).padStart(2, '0')}`; };
-const dmy = d => { const x = new Date(d); return `${dm(x)}/${x.getFullYear()}`; };
 const kg3 = v => Number(v).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
 // use_by is a plain date (YYYY-MM-DD); read it without timezone shifts
-const ymdToDm = s => { const [, m, d] = String(s).split('-'); return `${d}/${m}`; };
+const ymdToDmy = s => { const [y, m, d] = String(s).split('-'); return `${d}/${m}/${y}`; };
 
 function barcodeSvg(value) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -18,28 +16,32 @@ function barcodeSvg(value) {
   return svg.outerHTML;
 }
 
+// Unit label, Arabic and English: product, weight, carcass, consume-before date (no production date)
 function trayLabel(t) {
   const cs = (t.carcasses || []).map(c => c.no);
-  const src = cs.length <= 1 ? `Carcass ${esc(cs[0] || '')}` : `Batch ${esc(cs[0])} +${cs.length - 1}`;
+  const src = cs.length <= 1 ? esc(cs[0] || '') : `${esc(cs[0])} +${cs.length - 1}`;
   return `<div class="label">
-    <div class="name">${esc(t.product_name)}</div>
-    <div class="row"><span>${kg3(t.weight_kg)} kg</span><span class="strong">Use by ${ymdToDm(t.use_by)}</span></div>
-    <div class="row small"><span>${src}</span><span>Packed ${dm(t.packed_at)}</span></div>
+    ${t.product_name_ar ? `<div class="name ar" dir="rtl">${esc(t.product_name_ar)}</div>` : ''}
+    <div class="name${t.product_name_ar ? ' en' : ''}">${esc(t.product_name)}</div>
+    <div class="row"><span>${kg3(t.weight_kg)} kg <span dir="rtl">كجم</span></span><span class="code">${src}</span></div>
+    <div class="row strong"><span>Consume before</span><span>${ymdToDmy(t.use_by)}</span><span dir="rtl">استهلك قبل</span></div>
     ${barcodeSvg(t.code)}
   </div>`;
 }
 
+// Whole carcass label: no weight on it, because whole carcasses go to customers with this label
 function carcassLabel(c) {
   return `<div class="label">
-    <div class="row"><span class="name">${esc(c.species)} ${esc(c.no)}</span><span>${Number(c.weight_kg).toFixed(1)} kg</span></div>
-    <div class="row small"><span>Tag ${esc(c.ear_tag || '-')}</span><span>${dmy(c.received_at)}</span></div>
+    <div class="row"><span class="name">${esc(c.species)}</span>${c.species_ar ? `<span class="name ar" dir="rtl">${esc(c.species_ar)}</span>` : ''}</div>
+    <div class="row"><span class="code">${esc(c.no)}</span><span>Tag ${esc(c.ear_tag || '-')}</span></div>
+    ${c.chiller_use_by ? `<div class="row strong"><span>Consume before</span><span>${ymdToDmy(c.chiller_use_by)}</span><span dir="rtl">استهلك قبل</span></div>` : ''}
     ${barcodeSvg(c.no)}
   </div>`;
 }
 
 export function printLabels(items, settings) {
   if (!window.JsBarcode) throw new Error('The barcode library did not load. Check the internet connection and reload.');
-  const w = settings?.label_width_mm || 50, h = settings?.label_height_mm || 30;
+  const w = settings?.label_width_mm || 60, h = settings?.label_height_mm || 40;
   const body = items.map(it => it.kind === 'carcass' ? carcassLabel(it.data) : trayLabel(it.data)).join('');
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${w}mm ${h}mm; margin: 0; }
@@ -48,8 +50,11 @@ export function printLabels(items, settings) {
     body { font-family: Arial, Helvetica, sans-serif; color: #000; }
     .label { width: ${w}mm; height: ${h}mm; padding: 1.5mm 2mm; overflow: hidden; display: flex; flex-direction: column; gap: 0.4mm; page-break-after: always; break-after: page; }
     .label:last-child { page-break-after: auto; break-after: auto; }
-    .name { font-weight: 700; font-size: ${Math.max(8, Math.round(h / 3.2))}pt; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .row { display: flex; justify-content: space-between; gap: 2mm; font-size: ${Math.max(6.5, Math.round(h / 4.2))}pt; white-space: nowrap; }
+    .name { font-weight: 700; font-size: ${Math.max(8, Math.round(h / 4))}pt; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .name.ar { font-size: ${Math.max(9, Math.round(h / 3.6))}pt; text-align: right; }
+    .name.en { font-size: ${Math.max(7, Math.round(h / 5))}pt; }
+    .row { display: flex; justify-content: space-between; align-items: baseline; gap: 2mm; font-size: ${Math.max(6.5, Math.round(h / 5.5))}pt; white-space: nowrap; }
+    .code { font-family: "Courier New", monospace; font-weight: 700; }
     .row.small { font-size: ${Math.max(6, Math.round(h / 4.8))}pt; }
     .strong { font-weight: 700; }
     .bc { flex: 1 1 auto; width: 100%; min-height: 8mm; }

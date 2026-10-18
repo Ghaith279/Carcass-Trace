@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -53,38 +54,58 @@
           <div class="tiles" id="dTiles"></div>
           <div id="dMsg"></div>
         </div>
-        <div class="grid2">
-          <div class="panel">
-            <h2>In the chiller and being cut</h2>
+        <div class="panel">
+          <h2>Today by animal</h2>
+          <p class="hint">Heads and kg. Units shared between carcasses of different animals are split between them.</p>
+          <div class="table-wrap"><table class="matrix">
+            <thead>
+              <tr><th rowspan="2">Animal</th><th colspan="2" class="grp">In chiller</th><th colspan="2" class="grp">Received</th><th colspan="2" class="grp hl">Sold whole</th><th colspan="4" class="grp hl">Sold cut (by kg)</th><th colspan="2" class="grp">Produced</th><th colspan="2" class="grp">In stock</th><th rowspan="2" class="num">Wastage kg</th></tr>
+              <tr><th class="num">Head</th><th class="num">kg</th><th class="num">Head</th><th class="num">kg</th><th class="num hl">Head</th><th class="num hl">kg</th><th class="num hl">Units</th><th class="num hl">kg</th><th class="num hl">Online kg</th><th class="num hl">Counter kg</th><th class="num">Units</th><th class="num">kg</th><th class="num">Units</th><th class="num">kg</th></tr>
+            </thead>
+            <tbody id="dSpecies"></tbody>
+            <tfoot id="dSpeciesTotal"></tfoot>
+          </table></div>
+        </div>
+        <div class="panel">
+            <h2>Carcasses in the chiller</h2>
             <div class="table-wrap"><table>
-              <thead><tr><th>Carcass</th><th>Animal</th><th>Farm</th><th class="num">kg</th><th class="num">In chiller</th><th class="num">Packed</th><th class="num">Wastage</th><th>Status</th></tr></thead>
+              <thead><tr><th>Carcass</th><th>Animal</th><th>Farm</th><th class="num">kg</th><th class="num">Hanging</th><th>Consume before</th><th class="num">Packed</th><th class="num">Wastage</th><th>Status</th></tr></thead>
               <tbody id="dChiller"></tbody>
             </table></div>
             <p class="empty" id="dChillerEmpty">The chiller is empty.</p>
-          </div>
-          <div class="panel">
-            <h2>Produced today</h2>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th></tr></thead>
-              <tbody id="dProduced"></tbody>
-            </table></div>
-            <p class="empty" id="dProducedEmpty">Nothing produced yet today.</p>
-          </div>
+        </div>
+        <div class="grid2">
+            <div class="panel">
+              <h2>Whole carcasses sold today</h2>
+              <div class="table-wrap"><table>
+                <thead><tr><th>Carcass</th><th>Animal</th><th class="num">kg</th><th>Order</th></tr></thead>
+                <tbody id="dWhole"></tbody>
+              </table></div>
+              <p class="empty" id="dWholeEmpty">No whole carcasses sold today.</p>
+            </div>
+            <div class="panel">
+              <h2>Produced today</h2>
+              <div class="table-wrap"><table>
+                <thead><tr><th>Product</th><th class="num">Units</th><th class="num">kg</th></tr></thead>
+                <tbody id="dProduced"></tbody>
+              </table></div>
+              <p class="empty" id="dProducedEmpty">Nothing produced yet today.</p>
+            </div>
         </div>
         <div class="panel">
           <h2>What is left, and shelf life</h2>
           <div class="table-wrap"><table>
-            <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th>Oldest use-by</th><th class="num">Days left</th><th class="num">Expiring soon</th><th class="num">Expired</th></tr></thead>
+            <thead><tr><th>Product</th><th class="num">Units</th><th class="num">kg</th><th>Oldest consume-before</th><th class="num">Days left</th><th class="num">Expiring soon</th><th class="num">Expired</th></tr></thead>
             <tbody id="dStock"></tbody>
           </table></div>
-          <p class="empty" id="dStockEmpty">No trays in stock.</p>
+          <p class="empty" id="dStockEmpty">No units in stock.</p>
         </div>
         <div class="grid2">
           <div class="panel">
             <h2>Yield, last 30 days</h2>
             <p class="hint">Finished carcasses. Shrinkage = received − packed − wastage.</p>
             <div class="table-wrap"><table>
-              <thead><tr><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg kg</th><th class="num">Yield</th><th class="num">Wastage</th><th class="num">Shrinkage</th></tr></thead>
+              <thead><tr><th>Animal</th><th class="num">Head</th><th class="num">Avg kg</th><th class="num">Yield</th><th class="num">Wastage</th><th class="num">Shrinkage</th></tr></thead>
               <tbody id="dYield"></tbody>
             </table></div>
             <p class="empty" id="dYieldEmpty">No finished carcasses in the last 30 days.</p>
@@ -98,6 +119,15 @@
             <p class="empty" id="dWasteEmpty">No wastage recorded today.</p>
           </div>
         </div>
+        <form class="panel" id="xlForm">
+          <div><h2>Download records (Excel)</h2><p class="hint">One sheet per record type, one row per day, carcass, unit, wastage entry and order. Download each month and paste the rows under last month's to build a full history.</p></div>
+          <div class="row3" style="align-items:end">
+            <label>From<input id="xlFrom" type="date" required></label>
+            <label>To<input id="xlTo" type="date" required></label>
+            <button class="btn primary" type="submit" id="xlBtn">Download Excel</button>
+          </div>
+          <div id="xlMsg"></div>
+        </form>
       </div>
     </section>
 
@@ -106,11 +136,18 @@
       <form class="panel" id="rForm">
         <div><h2>Receive a carcass</h2><p class="hint">Weigh it and fill this in. The system gives it a number and prints its label.</p></div>
         <div class="row2">
-          <label>Animal<select id="rSpecies"><option>Sheep</option><option>Beef</option><option>Camel</option></select></label>
+          <label>Animal<select id="rSpecies"></select></label>
           <label>Weight (kg)<input id="rWeight" type="number" step="0.01" min="0.1" inputmode="decimal" required></label>
         </div>
-        <label>Ear tag number<input id="rTag" autocomplete="off"></label>
-        <label>Farm<input id="rFarm" list="farmList" autocomplete="off"></label>
+        <p class="hint" style="margin-top:-6px">Weight includes the head and offal, without the feet, intestines and tripe.</p>
+        <div class="row2">
+          <label>Temperature on arrival (°C)<input id="rTemp" type="number" step="0.1" min="-30" max="45" inputmode="decimal"></label>
+          <label>Ear tag number<input id="rTag" autocomplete="off"></label>
+        </div>
+        <div class="row2">
+          <label>From<select id="rSource"><option value="own_farm">Our farm</option><option value="trader">Trader</option></select></label>
+          <label>Farm or trader name<input id="rFarm" list="farmList" autocomplete="off"></label>
+        </div>
         <div class="row2">
           <label>Slaughterhouse<input id="rAbattoir" list="abattoirList" autocomplete="off"></label>
           <label>Kill number<input id="rKill" autocomplete="off"></label>
@@ -123,7 +160,7 @@
       <div class="panel">
         <h2>In the chiller or being cut</h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">kg</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">kg</th><th class="num">°C</th><th>Chiller consume before</th><th>Status</th><th></th></tr></thead>
           <tbody id="rRows"></tbody>
         </table></div>
         <p class="empty" id="rEmpty">No carcasses waiting. Register one on the left when it arrives.</p>
@@ -132,9 +169,13 @@
 
     <!-- CUTTING ROOM -->
     <section id="v-cut" hidden>
+      <div class="butcher-bar">
+        <label class="inline">Butcher on the block <select id="cButcher" style="width:auto;min-width:160px"><option value="">Choose…</option></select></label>
+        <span class="hint" id="cButcherHint">Pick your name before printing or recording wastage.</span>
+      </div>
       <div class="seg" role="tablist" id="cutModes">
         <button type="button" role="tab" data-mode="cut" aria-selected="true">Cut a carcass</button>
-        <button type="button" role="tab" data-mode="repro" aria-selected="false">Reproduce trays</button>
+        <button type="button" role="tab" data-mode="repro" aria-selected="false">Reproduce units</button>
       </div>
       <div class="grid" id="cutMain">
       <div class="stack">
@@ -175,36 +216,36 @@
       <div class="stack">
         <form class="panel" id="cPrintForm">
           <h2 id="cSelTitle">Choose a product</h2>
-          <p class="hint" id="cSelInfo">Labels will show the product, weight, carcass number and use-by date.</p>
+          <p class="hint" id="cSelInfo">Labels will show the product, weight, carcass number and consume-before date.</p>
           <div class="row2">
-            <label>Weight per tray (kg)<input id="cWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
-            <label>Number of trays<div class="stepper"><button class="btn" type="button" id="cMinus" aria-label="One less">−</button><input id="cCount" type="number" min="1" max="200" value="1" inputmode="numeric"><button class="btn" type="button" id="cPlus" aria-label="One more">+</button></div></label>
+            <label>Weight per unit (kg)<input id="cWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
+            <label>Number of units<div class="stepper"><button class="btn" type="button" id="cMinus" aria-label="One less">−</button><input id="cCount" type="number" min="1" max="200" value="1" inputmode="numeric"><button class="btn" type="button" id="cPlus" aria-label="One more">+</button></div></label>
           </div>
           <button class="btn primary big" type="submit" id="cPrintBtn" disabled>Print labels</button>
           <div id="cMsg"></div>
         </form>
         <div class="panel">
-          <h2>Trays from this carcass</h2>
+          <h2>Units from this carcass</h2>
           <p class="hint" id="cYield"></p>
           <div class="table-wrap"><table>
-            <thead><tr><th>Tray</th><th>Product</th><th class="num">kg</th><th>Use by</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Unit</th><th>Product</th><th class="num">kg</th><th>Consume before</th><th>Status</th><th></th></tr></thead>
             <tbody id="cRows"></tbody>
           </table></div>
-          <p class="empty" id="cRowsEmpty">Select a carcass to see its trays.</p>
+          <p class="empty" id="cRowsEmpty">Select a carcass to see its units.</p>
         </div>
       </div>
       </div>
       <div class="grid" id="cutRepro" hidden>
         <div class="stack">
           <div class="panel">
-            <div><h2>Trays going in</h2><p class="hint">Scan each tray you are turning into another product, for example steak into mince. They leave stock, and the new trays keep their carcass numbers.</p></div>
-            <input class="scan" id="xScan" placeholder="Scan tray label" autocomplete="off">
+            <div><h2>Units going in</h2><p class="hint">Scan each unit you are turning into another product, for example steak into mince. They leave stock, and the new units keep their carcass numbers.</p></div>
+            <input class="scan" id="xScan" placeholder="Scan unit label" autocomplete="off">
             <div id="xMsg"></div>
             <div class="table-wrap"><table>
-              <thead><tr><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
+              <thead><tr><th>Unit</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
               <tbody id="xRows"></tbody>
             </table></div>
-            <p class="empty" id="xEmpty">Scan the first tray.</p>
+            <p class="empty" id="xEmpty">Scan the first unit.</p>
             <p class="hint" id="xTotal"></p>
           </div>
         </div>
@@ -216,10 +257,10 @@
           </div>
           <form class="panel" id="xPrintForm">
             <h2 id="xSelTitle">Choose the new product</h2>
-            <p class="hint" id="xSelInfo">The use-by date is never later than the oldest tray going in.</p>
+            <p class="hint" id="xSelInfo">The consume-before date is never later than the oldest unit going in.</p>
             <div class="row2">
-              <label>Weight per tray (kg)<input id="xWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
-              <label>Number of trays<input id="xCount" type="number" min="1" max="200" value="1" inputmode="numeric"></label>
+              <label>Weight per unit (kg)<input id="xWeight" type="number" step="0.001" min="0.001" inputmode="decimal"></label>
+              <label>Number of units<input id="xCount" type="number" min="1" max="200" value="1" inputmode="numeric"></label>
             </div>
             <button class="btn primary big" type="submit" id="xPrintBtn" disabled>Reproduce and print</button>
             <div id="xResult"></div>
@@ -232,7 +273,7 @@
     <section id="v-pack" class="grid" hidden>
       <div class="stack">
         <form class="panel" id="pOrderForm">
-          <div><h2>Zid order</h2><p class="hint">Type or scan the Zid order number, then scan each tray as you pack it.</p></div>
+          <div><h2>Zid order</h2><p class="hint">Type or scan the Zid order number, then scan each unit as you pack it.</p></div>
           <div style="display:flex;gap:8px"><input class="scan" id="pOrderNo" placeholder="Order number" autocomplete="off" inputmode="numeric"><button class="btn" type="submit">Open</button></div>
           <div id="pOrderInfo"></div>
         </form>
@@ -244,10 +285,10 @@
       </div>
       <div class="panel">
         <h2 id="pTitle">Packing</h2>
-        <input class="scan" id="pScan" placeholder="Scan tray label" autocomplete="off" disabled>
+        <input class="scan" id="pScan" placeholder="Scan unit label" autocomplete="off" disabled>
         <div id="pMsg"></div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
+          <thead><tr><th>Unit</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
           <tbody id="pRows"></tbody>
         </table></div>
         <p class="empty" id="pEmpty">Open an order to start packing.</p>
@@ -260,8 +301,8 @@
     <section id="v-counter" class="grid" hidden>
       <div class="stack">
         <div class="panel">
-          <div><h2>Shop counter</h2><p class="hint">Scan each tray the customer takes. For a whole or half carcass, scan the carcass label.</p></div>
-          <input class="scan" id="kScan" placeholder="Scan tray or carcass label" autocomplete="off">
+          <div><h2>Shop counter</h2><p class="hint">Scan each unit the customer takes. For a whole or half carcass, scan the carcass label.</p></div>
+          <input class="scan" id="kScan" placeholder="Scan unit or carcass label" autocomplete="off">
           <div id="kMsg"></div>
         </div>
         <div class="panel">
@@ -276,7 +317,7 @@
           <thead><tr><th>Item</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
           <tbody id="kRows"></tbody>
         </table></div>
-        <p class="empty" id="kEmpty">Scan a tray to start.</p>
+        <p class="empty" id="kEmpty">Scan a unit to start.</p>
         <label>Zid order number from the POS (optional, adds the carcass numbers to that order in Zid)<input id="kReceipt" autocomplete="off"></label>
         <button class="btn primary big" id="kConfirm" type="button" disabled>Confirm sale</button>
         <div id="kResult"></div>
@@ -286,22 +327,33 @@
     <!-- STOCK -->
     <section id="v-stock" hidden>
       <div class="stack">
+        <div class="panel" id="ckPanel">
+          <div class="bar"><div><h2>End-of-day stock check</h2><p class="hint">Scan every unit on the shelves and in the chiller, then press Finish. The check is saved and shows what is missing.</p></div>
+            <button class="btn" id="ckStart" type="button">Start a stock check</button></div>
+          <div id="ckWork" hidden>
+            <input class="scan" id="ckScan" placeholder="Scan unit label" autocomplete="off">
+            <div class="stat-row" id="ckStats"></div>
+            <div id="ckMsg"></div>
+            <div class="btns"><button class="btn primary" id="ckFinish" type="button">Finish and save the check</button><button class="btn" id="ckCancel" type="button">Cancel</button></div>
+          </div>
+          <div id="ckResult"></div>
+        </div>
         <div class="panel">
           <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2>Stock by product</h2><button class="btn small" id="sRefresh" type="button">Refresh</button></div>
           <div class="stat-row" id="sStats"></div>
           <div class="table-wrap"><table>
-            <thead><tr><th>Product</th><th class="num">Trays</th><th class="num">kg</th><th>Oldest use-by</th><th>Shelf life</th></tr></thead>
+            <thead><tr><th>Product</th><th class="num">Units</th><th class="num">kg</th><th>Oldest consume-before</th><th>Shelf life</th></tr></thead>
             <tbody id="sRows"></tbody>
           </table></div>
-          <p class="empty" id="sEmpty">No trays in stock.</p>
+          <p class="empty" id="sEmpty">No units in stock.</p>
         </div>
         <div class="panel">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-            <h2>Trays in stock</h2>
-            <select id="sFilter" style="width:auto"><option value="all">All trays</option><option value="soon">Expiring soon</option><option value="expired">Expired</option></select>
+            <h2>Units in stock</h2>
+            <select id="sFilter" style="width:auto"><option value="all">All units</option><option value="soon">Expiring soon</option><option value="expired">Expired</option></select>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th><input type="checkbox" id="sAll" aria-label="Select all"></th><th>Tray</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th>Packed</th><th>Use by</th></tr></thead>
+            <thead><tr><th><input type="checkbox" id="sAll" aria-label="Select all"></th><th>Unit</th><th>Product</th><th>Carcass</th><th class="num">kg</th><th>Packed</th><th>Consume before</th></tr></thead>
             <tbody id="sTrays"></tbody>
           </table></div>
           <p class="empty" id="sTraysEmpty">Nothing here.</p>
@@ -319,7 +371,7 @@
       <div class="stack">
         <div class="panel">
           <h2>Average yield by farm</h2>
-          <p class="hint">Finished carcasses only. Yield = kg packed into trays ÷ kg received. Shrinkage = received − packed − wastage.</p>
+          <p class="hint">Finished carcasses only. Yield = kg packed into units ÷ kg received. Shrinkage = received − packed − wastage.</p>
           <div class="table-wrap"><table>
             <thead><tr><th>Farm</th><th>Animal</th><th class="num">Carcasses</th><th class="num">Avg received kg</th><th class="num">Avg yield</th><th class="num">Avg wastage</th><th class="num">Avg shrinkage</th></tr></thead>
             <tbody id="yFarms"></tbody>
@@ -327,9 +379,18 @@
           <p class="empty" id="yFarmsEmpty">No finished carcasses yet.</p>
         </div>
         <div class="panel">
+          <h2>By butcher, last 30 days</h2>
+          <p class="hint">Carcasses each butcher finished, and returns or complaints linked to their units.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Butcher</th><th class="num">Carcasses</th><th class="num">Avg yield</th><th class="num">Avg wastage</th><th class="num">Avg shrinkage</th><th class="num">Units today</th><th class="num">kg today</th><th class="num">Complaints</th></tr></thead>
+            <tbody id="yButchers"></tbody>
+          </table></div>
+          <p class="empty" id="yButchersEmpty">No butchers yet. An admin adds them in Settings.</p>
+        </div>
+        <div class="panel">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
             <h2>All carcasses</h2>
-            <select id="ySpecies" style="width:auto"><option value="">All animals</option><option>Sheep</option><option>Beef</option><option>Camel</option></select>
+            <select id="ySpecies" style="width:auto"><option value="">All animals</option></select>
           </div>
           <div class="table-wrap"><table>
             <thead><tr><th>Carcass</th><th>Animal</th><th>Ear tag</th><th>Farm</th><th class="num">Received kg</th><th class="num">Packed kg</th><th class="num">Yield</th><th class="num">Wastage kg</th><th class="num">Shrinkage</th><th class="num">In stock</th><th class="num">Sold</th><th>Status</th></tr></thead>
@@ -343,10 +404,25 @@
     <!-- TRACE -->
     <section id="v-trace" hidden>
       <div class="panel" style="margin-bottom:18px">
-        <div><h2>Trace anything</h2><p class="hint">Scan or type a tray label, carcass number, Zid order number, receipt number or ear tag.</p></div>
-        <input class="scan" id="tScan" placeholder="Tray, carcass, order or ear tag" autocomplete="off">
+        <div><h2>Trace anything</h2><p class="hint">Scan or type a unit label, carcass number, Zid order number, receipt number or ear tag.</p></div>
+        <input class="scan" id="tScan" placeholder="Unit, carcass, order or ear tag" autocomplete="off">
       </div>
       <div id="tOut"></div>
+      <form class="panel admin-only" id="rcForm" style="margin-top:18px">
+        <div><h2>Recall</h2><p class="hint">Find every order that got meat from a farm or trader, or from given carcass numbers. Customer names and phone numbers come from Zid.</p></div>
+        <div class="row3" style="align-items:end">
+          <label>Farm or trader<input id="rcFarm" list="farmList" autocomplete="off"></label>
+          <label>Received from<input id="rcFrom" type="date"></label>
+          <label>Received to<input id="rcTo" type="date"></label>
+        </div>
+        <label>Or carcass numbers (comma separated)<input id="rcNos" autocomplete="off" placeholder="N1018-01, N1018-02"></label>
+        <div class="btns"><button class="btn primary" type="submit">Find orders</button><button class="btn" type="button" id="rcZid" disabled>Get customer contacts from Zid</button><button class="btn" type="button" id="rcXl" disabled>Download Excel</button></div>
+        <div id="rcMsg"></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Order</th><th>Channel</th><th>Date</th><th>Customer</th><th>Phone</th><th>Items</th><th>Carcasses</th><th class="num">kg</th></tr></thead>
+          <tbody id="rcRows"></tbody>
+        </table></div>
+      </form>
     </section>
 
     <!-- SETTINGS -->
@@ -362,7 +438,7 @@
           <div id="zMsg"></div>
         </div>
         <div class="panel">
-          <div><h2>Products</h2><p class="hint">Set which animal each product comes from, its fixed weight (leave empty if weighed per tray) and shelf life. Tick "Button" for products the butchers use most.</p></div>
+          <div><h2>Products</h2><p class="hint">Set which animal each product comes from, its fixed weight (leave empty if weighed per unit) and shelf life. Tick "Button" for products the butchers use most.</p></div>
           <input id="prSearch" placeholder="Search products" autocomplete="off">
           <div class="table-wrap"><table>
             <thead><tr><th>Product</th><th>Barcode</th><th>Animal</th><th>Fixed kg</th><th>Shelf life (days)</th><th>Button</th><th>In use</th></tr></thead>
@@ -377,7 +453,32 @@
           <div id="prMsg"></div>
         </div>
         <div class="panel">
-          <div><h2>Staff logins</h2><p class="hint">Admins can change settings and products, delete labels and carcasses, and take trays out of stock. Staff can do the daily work only.</p></div>
+          <div><h2>Butchers</h2><p class="hint">Names to pick on the cutting-room screen, so yield and wastage show per butcher.</p></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Working here</th></tr></thead>
+            <tbody id="buRows"></tbody>
+          </table></div>
+          <form id="buAdd" class="row2" style="align-items:end">
+            <label>New butcher<input id="buName" required autocomplete="off"></label>
+            <button class="btn" type="submit">Add butcher</button>
+          </form>
+          <div id="buMsg"></div>
+        </div>
+        <div class="panel">
+          <div><h2>Animals</h2><p class="hint">The letters start each carcass number. "Chiller days" is how long a hanging carcass may stay in the chiller; its label shows the consume-before date.</p></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Animal</th><th>Arabic</th><th>Letters</th><th>Chiller days</th><th>In use</th></tr></thead>
+            <tbody id="spRows"></tbody>
+          </table></div>
+          <form id="spAdd" class="row3" style="align-items:end">
+            <label>New animal<input id="spName" required></label>
+            <label>Letters (e.g. G)<input id="spPrefix" required maxlength="3" style="text-transform:uppercase"></label>
+            <button class="btn" type="submit">Add animal</button>
+          </form>
+          <div id="spMsg"></div>
+        </div>
+        <div class="panel">
+          <div><h2>Staff logins</h2><p class="hint">Admins can change settings and products, delete labels and carcasses, and take units out of stock. Staff can do the daily work only.</p></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Email</th><th>Role</th><th></th></tr></thead>
             <tbody id="stfRows"></tbody>
@@ -395,8 +496,9 @@
           <div class="row3">
             <label>Label width (mm)<input id="stW" type="number" min="20" max="120"></label>
             <label>Label height (mm)<input id="stH" type="number" min="15" max="120"></label>
-            <label>Warn days before use-by<input id="stWarn" type="number" min="0" max="14"></label>
+            <label>Warn days before consume-before<input id="stWarn" type="number" min="0" max="14"></label>
           </div>
+          <label>Warn if a carcass arrives warmer than (°C)<input id="stTemp" type="number" step="0.1" min="-5" max="20"></label>
           <label>Time zone<input id="stTz" placeholder="Asia/Riyadh"></label>
           <div class="btns"><button class="btn primary" id="stSave" type="button">Save</button><button class="btn" id="stTest" type="button">Print a test label</button></div>
           <div id="stMsg"></div>

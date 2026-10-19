@@ -53,6 +53,16 @@
           <div class="bar"><h2>Shop right now</h2><span class="hint" id="dUpdated"></span></div>
           <div class="tiles" id="dTiles"></div>
           <div id="dMsg"></div>
+          <h3>Carcasses on hand, for tomorrow’s order</h3>
+          <div class="table-wrap"><table class="matrix">
+            <thead>
+              <tr><th rowspan="2">Animal</th><th colspan="2" class="grp hl">Whole, not cut yet</th><th colspan="2" class="grp">Being cut</th><th colspan="2" class="grp">All carcasses</th><th rowspan="2" class="num">Packed units in stock kg</th></tr>
+              <tr><th class="num hl">Head</th><th class="num hl">kg</th><th class="num">Head</th><th class="num">kg left</th><th class="num">Head</th><th class="num">kg</th></tr>
+            </thead>
+            <tbody id="dOnHand"></tbody>
+            <tfoot id="dOnHandTotal"></tfoot>
+          </table></div>
+          <p class="hint">“kg left” on a carcass being cut = received kg − packed − wastage.</p>
         </div>
         <div class="panel">
           <h2>Today by animal</h2>
@@ -69,7 +79,7 @@
         <div class="panel">
             <h2>Carcasses in the chiller</h2>
             <div class="table-wrap"><table>
-              <thead><tr><th>Carcass</th><th>Animal</th><th>Farm</th><th class="num">kg</th><th class="num">Hanging</th><th>Consume before</th><th class="num">Packed</th><th class="num">Wastage</th><th>Status</th></tr></thead>
+              <thead><tr><th>Carcass</th><th>Animal</th><th>Farm</th><th class="num">kg</th><th class="num">Hanging</th><th>Consume before</th><th class="num">Packed</th><th class="num">kg left</th><th class="num">Wastage</th><th>Status</th></tr></thead>
               <tbody id="dChiller"></tbody>
             </table></div>
             <p class="empty" id="dChillerEmpty">The chiller is empty.</p>
@@ -306,19 +316,25 @@
           <div id="kMsg"></div>
         </div>
         <div class="panel">
-          <h3>Recent counter sales</h3>
+          <div class="bar"><h3>Recent counter sales</h3><button class="btn small" id="kFind" type="button">Find POS orders now</button></div>
+          <p class="hint">Sales confirmed without a Zid order number are matched to their Zid POS order by products and time. If one is still waiting, type its number and press Link.</p>
+          <div id="kLinkMsg"></div>
           <div class="table-wrap"><table><tbody id="kRecent"></tbody></table></div>
           <p class="empty" id="kRecentEmpty">No counter sales yet.</p>
         </div>
       </div>
       <div class="panel">
         <h2>Leaving now</h2>
+        <div class="ringup" id="kRingup" hidden>
+          <h3>Enter in Zid POS</h3>
+          <ul id="kRingupRows"></ul>
+        </div>
         <div class="table-wrap"><table>
           <thead><tr><th>Item</th><th>Carcass</th><th class="num">kg</th><th></th></tr></thead>
           <tbody id="kRows"></tbody>
         </table></div>
         <p class="empty" id="kEmpty">Scan a unit to start.</p>
-        <label>Zid order number from the POS (optional, adds the carcass numbers to that order in Zid)<input id="kReceipt" autocomplete="off"></label>
+        <label>Zid order number from the POS (optional: if you leave it empty, The Meatrix finds the order itself)<input id="kReceipt" autocomplete="off"></label>
         <button class="btn primary big" id="kConfirm" type="button" disabled>Confirm sale</button>
         <div id="kResult"></div>
       </div>

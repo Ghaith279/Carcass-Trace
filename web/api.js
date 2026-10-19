@@ -125,6 +125,9 @@ export const api = {
     return check(await sb.rpc('sell_items', { p_codes: codes, p_channel: channel, p_order_ref: orderRef || null, p_customer_name: customer || null }));
   },
   async order(ref) { return check(await sb.from('orders').select('*').eq('ref', ref).maybeSingle()); },
+  async linkCounterSale(ref, zidRef) { return check(await sb.rpc('link_counter_sale', { p_ref: ref, p_zid_ref: zidRef })); },
+  async ordersByRefs(refs) { return refs.length ? check(await sb.from('orders').select('ref').in('ref', refs)) : []; },
+  async traysForOrders(refs) { return refs.length ? check(await sb.from('trays').select('order_ref, product_id, product_name, weight_kg').in('order_ref', refs)) : []; },
   async recentOrders(channel, limit = 15) {
     return check(await sb.from('orders').select('*').eq('channel', channel).order('created_at', { ascending: false }).limit(limit));
   },

@@ -486,9 +486,23 @@ loaders.dash = async () => {
     $('dSpecies').innerHTML = shown.map(r => `<tr><td><b>${esc(r.species)}</b></td>${row(r)}</tr>`).join('');
     const tot = {}; ['chiller_head', 'chiller_kg', 'received_head', 'received_kg', 'whole_head', 'whole_kg', 'units_sold', 'kg_sold', 'kg_online', 'kg_counter', 'units_made', 'kg_made', 'stock_units', 'stock_kg', 'waste_kg'].forEach(f => { tot[f] = sum(sp, f); });
     $('dSpeciesTotal').innerHTML = `<tr><td><b>Total</b></td>${row(tot)}</tr>`;
+    // carcasses on hand: whole ones still hanging, and what is left on the ones being cut
+    const left = c => c.status === 'cutting' ? Math.max(0, num(c.weight_kg) - num(c.packed_kg) - num(c.waste_kg)) : num(c.weight_kg);
+    const hand = {};
+    sp.forEach(r => { hand[r.species] = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: num(r.stock_kg) }; });
+    d.chiller.forEach(c => {
+      const h = hand[c.species] || (hand[c.species] = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: 0 });
+      if (c.status === 'cutting') { h.cut++; h.cutKg += left(c); } else { h.whole++; h.wholeKg += num(c.weight_kg); }
+    });
+    const handRow = (name, h) => `<tr><td><b>${esc(name)}</b></td><td class="num hl">${n0(h.whole)}</td><td class="num hl">${n1(h.wholeKg)}</td><td class="num">${n0(h.cut)}</td><td class="num">${n1(h.cutKg)}</td><td class="num">${n0(h.whole + h.cut)}</td><td class="num">${n1(h.wholeKg + h.cutKg)}</td><td class="num">${n1(h.stockKg)}</td></tr>`;
+    const handShown = Object.entries(hand).filter(([n, h]) => h.whole || h.cut || h.stockKg || state.species.find(x => x.name === n)?.active);
+    $('dOnHand').innerHTML = handShown.map(([n, h]) => handRow(n, h)).join('');
+    const ht = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: 0 };
+    Object.values(hand).forEach(h => Object.keys(ht).forEach(k => { ht[k] += h[k]; }));
+    $('dOnHandTotal').innerHTML = handRow('Total', ht);
     const hrs = h => num(h) < 24 ? `${Math.round(num(h))} h` : `${(num(h) / 24).toFixed(1)} days`;
     $('dChillerEmpty').hidden = d.chiller.length > 0;
-    $('dChiller').innerHTML = d.chiller.map(c => `<tr class="click" data-trace="${esc(c.no)}"><td class="code">${esc(c.no)}</td><td>${esc(c.species)}</td><td>${esc(c.farm || '')}</td><td class="num">${kg(c.weight_kg, 1)}</td><td class="num">${hrs(c.hours)}</td><td>${c.chiller_use_by ? useByChip(c.chiller_use_by) : ''}</td><td class="num">${kg(c.packed_kg, 1)}</td><td class="num">${kg(c.waste_kg, 1)}</td><td>${chip(c.status)}</td></tr>`).join('');
+    $('dChiller').innerHTML = d.chiller.map(c => `<tr class="click" data-trace="${esc(c.no)}"><td class="code">${esc(c.no)}</td><td>${esc(c.species)}</td><td>${esc(c.farm || '')}</td><td class="num">${kg(c.weight_kg, 1)}</td><td class="num">${hrs(c.hours)}</td><td>${c.chiller_use_by ? useByChip(c.chiller_use_by) : ''}</td><td class="num">${kg(c.packed_kg, 1)}</td><td class="num"><b>${kg(left(c), 1)}</b></td><td class="num">${kg(c.waste_kg, 1)}</td><td>${chip(c.status)}</td></tr>`).join('');
     $('dWholeEmpty').hidden = d.whole_today.length > 0;
     $('dWhole').innerHTML = d.whole_today.map(c => `<tr class="click" data-trace="${esc(c.no)}"><td class="code">${esc(c.no)}</td><td>${esc(c.species)}</td><td class="num">${kg(c.weight_kg, 1)}</td><td class="code">${esc(c.order_ref || '')}</td></tr>`).join('');
     $('dProducedEmpty').hidden = d.produced_today.length > 0;
@@ -664,18 +678,119 @@ $('pConfirm').addEventListener('click', async () => {
 });
 
 /* ---------------- shop counter ---------------- */
+const TEMP_REF = /^C\d{6}-\d{6}$/;   // a counter sale with no Zid order number yet
 loaders.counter = async () => {
   try {
     const rows = await api.recentOrders('counter');
     $('kRecentEmpty').hidden = rows.length > 0;
-    $('kRecent').innerHTML = rows.map(o => `<tr class="click" data-trace="${esc(o.ref)}"><td class="code">${esc(o.ref)}</td><td>${when(o.created_at)}</td><td class="hint">${esc(o.trace_summary || '')}</td></tr>`).join('');
+    $('kRecent').innerHTML = rows.map(o => {
+      const linked = !TEMP_REF.test(o.ref);
+      const status = linked
+        ? `<span class="chip ${o.zid_comment_posted ? 'good' : ''}">Zid ${esc(o.ref)}</span>`
+        : `<div class="link-row"><input class="small" data-link-in="${esc(o.ref)}" placeholder="Zid order no." aria-label="Zid order number for ${esc(o.ref)}"><button class="btn small" type="button" data-link="${esc(o.ref)}">Link</button></div>`;
+      return `<tr><td class="click" data-trace="${esc(o.ref)}">${when(o.created_at)}<div class="hint">${esc(o.trace_summary || '')}</div></td><td>${status}</td></tr>`;
+    }).join('');
+    if (rows.some(o => !TEMP_REF.test(o.ref) && !o.zid_comment_posted)) {
+      // a link made earlier whose comment did not reach Zid: try again quietly
+      for (const o of rows.filter(o => !TEMP_REF.test(o.ref) && !o.zid_comment_posted).slice(0, 3)) {
+        try { await api.zid('post_comment', { order_ref: o.ref }); } catch (_) {}
+      }
+    }
+    if (rows.some(o => TEMP_REF.test(o.ref))) autoLinkCounter();
   } catch (_) {}
 };
+
+// Find the Zid POS order for each counter sale that has no Zid number yet:
+// the same products, rung up within 20 minutes of the scan. Only a clear match is linked.
+let linking = false;
+async function autoLinkCounter(manual = false) {
+  if (linking) return; linking = true;
+  let reload = false;
+  try {
+    const sales = (await api.recentOrders('counter', 30)).filter(o => TEMP_REF.test(o.ref) && Date.now() - Date.parse(o.created_at) < 6 * 3600e3);
+    if (!sales.length) { if (manual) msg($('kLinkMsg'), 'Every recent sale already has its Zid order.', 'ok'); return; }
+    const { orders: zidOrders = [], listed = 0 } = await api.zid('recent_orders', { since_minutes: 420 });
+    const taken = new Set((await api.ordersByRefs(zidOrders.map(z => z.id))).map(r => r.ref));
+    const free = zidOrders.filter(z => !taken.has(z.id));
+    const trays = await api.traysForOrders(sales.map(o => o.ref));
+    const localIds = op => state.products.filter(p => (op.zid_product_id && p.zid_product_id === op.zid_product_id) || (op.barcode && p.barcode === op.barcode) || (op.sku && p.sku === op.sku)).map(p => p.id);
+    const used = new Set(); let linked = 0, unclear = 0;
+    for (const sale of sales.slice().sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))) {
+      const mine = trays.filter(t => t.order_ref === sale.ref);
+      if (!mine.length) continue;   // whole carcasses only: link by hand
+      const count = {}; mine.forEach(t => { count[t.product_id] = (count[t.product_id] || 0) + 1; });
+      const want = Object.keys(count);
+      const cands = [];
+      for (const z of free) {
+        if (used.has(z.id) || !z.created_at) continue;
+        const dt = Math.abs(Date.parse(z.created_at) - Date.parse(sale.created_at)) / 60000;
+        if (dt > 20) continue;
+        const lines = (z.products || []).map(l => ({ ids: localIds(l), q: l.quantity }));
+        if (!lines.length || lines.some(l => !l.ids.length)) continue;
+        if (!want.every(pid => lines.some(l => l.ids.includes(pid)))) continue;
+        if (!lines.every(l => l.ids.some(id => want.includes(id)))) continue;
+        // whole-number quantities should match the number of units; weights in kg are not compared
+        let off = 0;
+        want.forEach(pid => { const l = lines.find(x => x.ids.includes(pid)); if (Number.isInteger(l.q)) off += Math.abs(l.q - count[pid]); });
+        cands.push({ z, dt, off });
+      }
+      cands.sort((a, b) => a.off - b.off || a.dt - b.dt);
+      const [best, next] = cands;
+      if (!best) continue;
+      if (next && next.off === best.off && next.dt - best.dt < 3) { unclear++; continue; }
+      try {
+        await api.linkCounterSale(sale.ref, best.z.id);
+        used.add(best.z.id); linked++; reload = true;
+        try { await api.zid('post_comment', { order_ref: best.z.id }); } catch (_) {}
+      } catch (_) {}
+    }
+    if (manual) {
+      const left = sales.length - linked;
+      msg($('kLinkMsg'), `${linked ? `Linked ${linked} sale${linked > 1 ? 's' : ''} to Zid. ` : ''}${left ? `${left} still waiting${unclear ? `, ${unclear} with more than one possible POS order` : ''}. Type the Zid order number next to ${left > 1 ? 'them' : 'it'}.` : ''}${!listed ? ' Zid returned no recent orders.' : ''}`, left ? 'warn' : 'ok');
+    }
+  } catch (err) { if (manual) msg($('kLinkMsg'), 'Could not check Zid: ' + errText(err), 'err'); }
+  finally { linking = false; }
+  if (reload) loaders.counter();
+}
+$('kFind').addEventListener('click', () => autoLinkCounter(true));
+setInterval(() => { if (state.tab === 'counter' && !document.hidden && !$('app').hidden) autoLinkCounter(); }, 60000);
+$('kRecent').addEventListener('click', async e => {
+  const b = e.target.closest('[data-link]');
+  if (!b) return;
+  const ref = b.dataset.link;
+  const input = $('kRecent').querySelector(`[data-link-in="${CSS.escape(ref)}"]`);
+  const no = input.value.trim(); if (!no) { input.focus(); return; }
+  b.disabled = true;
+  try {
+    await api.linkCounterSale(ref, no);
+    let line = '';
+    try { await api.zid('post_comment', { order_ref: no }); line = ' The carcass numbers were added to it.'; }
+    catch (err) { line = ` It could not be sent to Zid (${errText(err)}).`; }
+    msg($('kLinkMsg'), `Linked to Zid order ${no}.${line}`, 'ok'); loaders.counter();
+  } catch (err) { msg($('kLinkMsg'), errText(err), 'err'); b.disabled = false; }
+});
+
+// What the cashier enters in the POS: each product with the weight of every unit
+function renderRingUp(items) {
+  const groups = new Map();
+  for (const it of items) {
+    const key = it.kind === 'tray' ? it.product_id : 'c:' + it.code;
+    if (!groups.has(key)) {
+      const p = it.kind === 'tray' ? state.productsById[it.product_id] : null;
+      groups.set(key, { name: p?.name || it.label, ar: p?.name_ar || '', sku: p?.sku || p?.barcode || '', kgs: [] });
+    }
+    groups.get(key).kgs.push(Number(it.weight_kg));
+  }
+  $('kRingup').hidden = !items.length;
+  $('kRingupRows').innerHTML = [...groups.values()].map(g => `<li><div class="ru-name">${esc(g.name)}${g.ar ? ` <span class="ru-ar" lang="ar" dir="rtl">${esc(g.ar)}</span>` : ''}${g.sku ? ` <span class="hint code">${esc(g.sku)}</span>` : ''}</div>
+    <div class="ru-kg">${g.kgs.map(k => kg(k, 3) + ' kg').join(' + ')}${g.kgs.length > 1 ? ` <span class="hint">= ${kg(g.kgs.reduce((a, b) => a + b, 0), 3)} kg, ${g.kgs.length} units</span>` : ''}</div></li>`).join('');
+}
 function renderCounter() {
   const items = state.counter.items;
   $('kEmpty').hidden = items.length > 0;
   $('kRows').innerHTML = itemRows(items, 'k');
   $('kConfirm').disabled = !items.length;
+  renderRingUp(items);
 }
 onEnter($('kScan'), async v => {
   const items = state.counter.items;
@@ -695,8 +810,9 @@ $('kConfirm').addEventListener('click', async () => {
       try { await api.zid('post_comment', { order_ref: o.ref }); zidLine = ' Added to the Zid order.'; }
       catch (err) { zidLine = ` Could not add it to the Zid order (${esc(errText(err))}).`; }
     }
-    msgHtml($('kResult'), `<strong>Sale ${esc(o.ref)} recorded.${zidLine}</strong> <span class="code">${esc(o.trace_summary)}</span>`, ref && !zidLine.startsWith(' Could') ? 'ok' : (ref ? 'warn' : 'ok'));
+    msgHtml($('kResult'), `<strong>Sale recorded.${zidLine}${ref ? '' : ' The Meatrix will find its Zid POS order by itself.'}</strong> <span class="code">${esc(o.trace_summary)}</span>`, ref && !zidLine.startsWith(' Could') ? 'ok' : (ref ? 'warn' : 'ok'));
     state.counter.items = []; $('kReceipt').value = ''; renderCounter(); loaders.counter(); $('kScan').focus();
+    if (!ref) setTimeout(() => autoLinkCounter(), 45000);
   } catch (err) { msg($('kMsg'), 'Could not record: ' + errText(err), 'err'); $('kConfirm').disabled = false; }
 });
 

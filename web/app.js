@@ -89,7 +89,7 @@ async function enter(session) {
   try { tab = localStorage.getItem('ct_tab') || tab; } catch (_) {}
   showTab(tab);
 }
-const DEFAULT_SPECIES = ['Naeemi', 'Naeemi Herfy', 'Harri', 'Beef', 'Camel'].map(name => ({ name, active: true, chiller_days: 5 }));
+const DEFAULT_SPECIES = ['Naeemi', 'Naeemi Herfy', 'Harri', 'Beef', 'Hashi'].map(name => ({ name, active: true, chiller_days: 5 }));
 async function loadSpecies() {
   try { state.species = await api.species(); } catch (_) { state.species = DEFAULT_SPECIES; }
   const active = state.species.filter(s => s.active);
@@ -213,7 +213,7 @@ async function pickCarcass(raw) {
 }
 function renderCutActive() {
   const a = state.cut.active, el = $('cActive');
-  $('cActiveBtns').hidden = !a.length; $('cFinish').hidden = a.length !== 1;
+  $('cActiveBtns').hidden = !a.length; $('cFinish').hidden = a.length !== 1; $('cFinishBox').hidden = true;
   $('wPanel').hidden = a.length !== 1;
   if (a.length === 1) loadWaste();
   if (!a.length) { el.className = 'empty'; el.textContent = 'No carcass selected.'; return; }
@@ -235,30 +235,76 @@ $('cBatch').addEventListener('change', () => {
   $('cScan').focus();
 });
 $('cClear').addEventListener('click', () => { state.cut.active = []; renderCutActive(); renderProducts(); renderCutTrays(); $('cScan').focus(); });
+// Finishing shows the carcass's numbers first; nothing changes until OK is pressed
 $('cFinish').addEventListener('click', async () => {
   const c = state.cut.active[0]; if (!c) return;
+  $('cFinish').disabled = true;
+  try {
+    butcherId(); msg($('cMsg'), '');
+    const y = await api.carcassYieldOne(c.id);
+    if (state.cut.active[0]?.id !== c.id) return;
+    const rec = num(y?.weight_kg ?? c.weight_kg), packed = num(y?.packed_kg), waste = num(y?.waste_kg), shrink = rec - packed - waste;
+    const p = v => rec > 0 ? ` (${pct(v / rec * 100)})` : '';
+    const parts = Object.keys(WASTE).filter(k => num(y?.[k + '_kg']) > 0).map(k => `${kg(y[k + '_kg'], 1)} kg ${WASTE[k].toLowerCase()}`);
+    $('cFinishTitle').textContent = `Finish ${c.no}? Check these numbers first.`;
+    $('cFinishKv').innerHTML = `<dt>Received</dt><dd>${kg(rec, 1)} kg</dd>
+      <dt>Yield (packed)</dt><dd><strong>${kg(packed, 2)} kg${p(packed)}</strong> in ${y?.trays ?? 0} units</dd>
+      <dt>Wastage</dt><dd><strong>${kg(waste, 2)} kg${p(waste)}</strong>${parts.length ? ' · ' + esc(parts.join(', ')) : ''}</dd>
+      <dt>Shrinkage</dt><dd><strong>${kg(shrink, 2)} kg${p(shrink)}</strong></dd>`;
+    const notes = [];
+    if (!packed) notes.push('Nothing has been packed from this carcass.');
+    if (!waste) notes.push('No wastage has been recorded.');
+    notes.push('If a number is wrong, press Cancel and fix it before finishing.');
+    $('cFinishNote').textContent = notes.join(' ');
+    $('cFinishBox').hidden = false; $('cFinishOk').focus();
+  } catch (err) { msg($('cMsg'), errText(err), 'err'); }
+  finally { $('cFinish').disabled = false; }
+});
+$('cFinishNo').addEventListener('click', () => { $('cFinishBox').hidden = true; $('cScan').focus(); });
+$('cFinishOk').addEventListener('click', async () => {
+  const c = state.cut.active[0]; if (!c) return;
+  $('cFinishOk').disabled = true;
   try {
     await api.finishCarcass(c.id, butcherId());
     let line = '';
     try { const y = await api.carcassYieldOne(c.id); if (y) line = ' ' + breakdown(y) + '.'; } catch (_) {}
     msg($('cMsg'), `${c.no} finished.${line} Scan the next carcass.`, 'ok');
+    $('cFinishBox').hidden = true;
     state.cut.active = []; loaders.cut(); $('cScan').focus();
   } catch (err) { msg($('cMsg'), errText(err), 'err'); }
+  finally { $('cFinishOk').disabled = false; }
 });
 
 function productsForCut() {
   const sp = state.cut.active[0]?.species;
   return state.products.filter(p => p.active && (!sp || !p.species || p.species === sp));
 }
+// Products grouped by animal: the given animals first and open, products for any animal next,
+// the other animals folded underneath so any product can still be picked
+function productGroups(q, own, sel, attr, otherNote) {
+  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`;
+  const byName = (a, b) => (b.quick ? 1 : 0) - (a.quick ? 1 : 0) || String(a.name).localeCompare(String(b.name));
+  let all = state.products.filter(p => p.active);
+  if (q) all = all.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
+  const names = state.species.map(x => x.name);
+  all.forEach(p => { if (p.species && !names.includes(p.species)) names.push(p.species); });
+  const order = [...own, '', ...names.filter(n => !own.includes(n))];
+  const groups = order.map(n => ({ n, items: all.filter(p => (p.species || '') === n).sort(byName) })).filter(g => g.items.length);
+  const html = groups.map(g => {
+    const open = q || !own.length || own.includes(g.n) || g.n === '' || g.items.some(p => p.id === sel);
+    const label = g.n ? g.n : 'Any animal';
+    const note = otherNote && own.length && g.n && !own.includes(g.n) ? ' <span class="hint">· other animal</span>' : '';
+    return `<details class="pgroup" ${open ? 'open' : ''}><summary>${esc(label)} <span class="hint">${g.items.length}</span>${note}</summary><div class="products">${g.items.slice(0, 80).map(btn).join('')}</div></details>`;
+  }).join('');
+  return { html, empty: !groups.length };
+}
 function renderProducts() {
   const q = $('cProdSearch').value.trim().toLowerCase();
-  let list = productsForCut();
-  if (q) list = list.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
-  else if (list.some(p => p.quick)) list = list.filter(p => p.quick);
-  list = list.slice(0, 60);
-  $('cProdEmpty').hidden = list.length > 0;
-  const sel = state.cut.product?.id;
-  $('cProducts').innerHTML = list.map(p => `<button type="button" data-prod="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`).join('');
+  const sp = state.cut.active[0]?.species;
+  const g = productGroups(q, sp ? [sp] : [], state.cut.product?.id, 'prod', true);
+  $('cProdEmpty').hidden = !g.empty;
+  $('cProdEmpty').textContent = q ? `No product matches "${$('cProdSearch').value.trim()}".` : 'No products yet. Load them from Zid in Settings.';
+  $('cProducts').innerHTML = g.html;
 }
 $('cProdSearch').addEventListener('input', renderProducts);
 $('cProdSearch').addEventListener('keydown', e => {
@@ -266,7 +312,9 @@ $('cProdSearch').addEventListener('keydown', e => {
   e.preventDefault();
   const q = $('cProdSearch').value.trim();
   const hit = state.products.find(p => p.active && (p.barcode === q || p.sku === q));
-  const list = productsForCut().filter(p => [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const match = state.products.filter(p => p.active && [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const own = productsForCut().filter(p => match.includes(p));
+  const list = own.length ? own : match;
   const p = hit || (list.length === 1 ? list[0] : null);
   if (p) { $('cProdSearch').value = ''; selectProduct(p); } else msg($('cMsg'), `No single product matches "${q}".`, 'warn');
 });
@@ -386,17 +434,22 @@ function setCutMode(m) {
 $('cutModes').addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setCutMode(b.dataset.mode); });
 
 /* ---------------- cutting room: reproduce units ---------------- */
+const MINCE = /(mince|keema|kheema|qeema|ground|مفروم)/i;
+const reproAnimal = () => state.repro.items[0]?.species?.[0] || null;
+const reproProducts = () => { const sp = reproAnimal(); return sp ? state.products.filter(p => p.active && p.species === sp && MINCE.test(`${p.name || ''} ${p.name_ar || ''}`)) : []; };
 function renderRepro() {
+  if (state.repro.product && !reproProducts().includes(state.repro.product)) state.repro.product = null;
   const { items, product } = state.repro;
   $('xEmpty').hidden = items.length > 0;
   $('xRows').innerHTML = items.map((it, i) => `<tr><td class="code">${esc(it.code)}</td><td>${esc(it.label)}</td><td class="code">${it.carcasses.map(esc).join('<br>')}</td><td class="num">${kg(it.weight_kg, 3)}</td><td><button class="btn small" type="button" data-rm-x="${i}" aria-label="Remove">×</button></td></tr>`).join('');
   const total = items.reduce((s, it) => s + num(it.weight_kg), 0);
   $('xTotal').textContent = items.length ? `${items.length} unit(s), ${kg(total, 3)} kg going in.` : '';
+  // units can only become minced meat of their own animal
   const q = $('xProdSearch').value.trim().toLowerCase();
-  let list = state.products.filter(p => p.active);
-  if (q) list = list.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
-  else if (list.some(p => p.quick)) list = list.filter(p => p.quick);
-  $('xProducts').innerHTML = list.slice(0, 60).map(p => `<button type="button" data-xprod="${esc(p.id)}" aria-pressed="${p.id === product?.id}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`).join('');
+  const sp = reproAnimal(), list = reproProducts().filter(p => !q || [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
+  $('xProducts').innerHTML = list.length
+    ? `<div class="products">${list.map(p => `<button type="button" data-xprod="${esc(p.id)}" aria-pressed="${p.id === product?.id}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`).join('')}</div>`
+    : `<p class="empty">${!sp ? 'Scan the units first. Their minced meat shows here.' : q ? `No ${esc(sp.toLowerCase())} minced meat matches "${esc($('xProdSearch').value.trim())}".` : `No minced meat is set up for ${esc(sp.toLowerCase())}. In Settings › Products, set the animal of its minced meat product to ${esc(sp)}.`}</p>`;
   $('xPrintBtn').disabled = !product || !items.length;
   if (product) {
     $('xSelTitle').textContent = product.name;
@@ -413,6 +466,8 @@ onEnter($('xScan'), async v => {
   try {
     const it = await lookupItem(v);
     if (it.kind !== 'tray') { msg($('xMsg'), 'Scan unit labels here, not carcass labels.', 'err'); return; }
+    const sp = reproAnimal();
+    if (it.species.length !== 1 || (sp && it.species[0] !== sp)) { msg($('xMsg'), `${it.code} is ${it.species.join(' and ').toLowerCase() || 'from no carcass'}. Only units from one animal${sp ? ` (${sp.toLowerCase()})` : ''} can be reproduced together.`, 'err'); return; }
     items.push(it); msg($('xMsg'), `Added ${it.label}.`, 'ok'); $('xResult').innerHTML = ''; renderRepro();
   } catch (err) { msg($('xMsg'), errText(err), 'err'); }
 });
@@ -422,10 +477,11 @@ $('xProdSearch').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
   const q = $('xProdSearch').value.trim();
-  const hit = state.products.find(p => p.active && (p.barcode === q || p.sku === q));
-  const list = state.products.filter(p => p.active && [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const ok = reproProducts();
+  const hit = ok.find(p => p.barcode === q || p.sku === q);
+  const list = ok.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
   const p = hit || (list.length === 1 ? list[0] : null);
-  if (p) { $('xProdSearch').value = ''; selectReproProduct(p); } else msg($('xMsg'), `No single product matches "${q}".`, 'warn');
+  if (p) { $('xProdSearch').value = ''; selectReproProduct(p); } else msg($('xMsg'), `No single ${(reproAnimal() || '').toLowerCase()} minced meat matches "${q}".`, 'warn');
 });
 $('xProducts').addEventListener('click', e => { const b = e.target.closest('[data-xprod]'); if (b) selectReproProduct(state.productsById[b.dataset.xprod]); });
 function selectReproProduct(p) {
@@ -573,7 +629,7 @@ async function lookupItem(raw) {
     if (t.status === 'written_off') throw new Error(`Unit ${code} was taken out of stock (${t.write_off_reason}).`);
     if (t.status === 'returned') throw new Error(`Unit ${code} came back from a customer (${t.write_off_reason}).`);
     if (t.status === 'reproduced') throw new Error(`Unit ${code} was reproduced (${t.write_off_reason}). Scan the new unit instead.`);
-    return { kind: 'tray', code: t.code, product_id: t.product_id, label: t.product_name, carcasses: carcassNos(t), weight_kg: t.weight_kg, use_by: t.use_by };
+    return { kind: 'tray', code: t.code, product_id: t.product_id, label: t.product_name, carcasses: carcassNos(t), species: [...new Set((t.carcasses || []).map(c => c.species))], weight_kg: t.weight_kg, use_by: t.use_by };
   }
   const c = await api.carcassByNo(code.toUpperCase());
   if (c) {

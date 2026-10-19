@@ -127,3 +127,14 @@ table.matrix tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
 @media (max-width: 600px) { .row3 { grid-template-columns: minmax(0, 1fr); } }
 .butcher-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; }
 .butcher-bar.need { border: 2px solid var(--accent); background: var(--accent-soft); }
+
+/* shop counter: what to enter in the POS */
+.ringup { border: 2px solid var(--accent); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.ringup h3 { margin: 0; color: var(--accent); font-size: 14px; text-transform: uppercase; letter-spacing: .06em; }
+.ringup ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ringup li { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 14px; }
+.ru-name { font-size: 20px; font-weight: 700; min-width: 0; }
+.ru-ar { font-weight: 600; }
+.ru-kg { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.link-row { display: flex; gap: 6px; }
+.link-row input { width: 9em; padding: 5px 8px; font-size: 13px; }

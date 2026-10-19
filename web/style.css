@@ -81,6 +81,9 @@ tr.click:hover td { background: var(--bg); }
 td input, td select { padding: 6px 8px; font-size: 14px; }
 .empty { color: var(--muted); font-size: 14px; padding: 10px 0; }
 .active-card { border: 2px solid var(--accent); background: var(--accent-soft); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
+.finish-check { border: 2px solid var(--warn); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.finish-check h3 { margin: 0; }
+.finish-check .kv { font-size: 15px; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 14px; margin: 0; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
@@ -138,3 +141,10 @@ table.matrix tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
 .ru-kg { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .link-row { display: flex; gap: 6px; }
 .link-row input { width: 9em; padding: 5px 8px; font-size: 13px; }
+
+/* cutting room: products grouped by animal */
+.pgroups { display: flex; flex-direction: column; gap: 8px; }
+.pgroup { border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; }
+.pgroup summary { cursor: pointer; font-weight: 700; padding: 10px 2px; }
+.pgroup[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.pgroup .products { padding-bottom: 10px; }

@@ -198,12 +198,18 @@
             <button class="btn small" id="cFinish" type="button">Carcass finished</button>
             <button class="btn small" id="cClear" type="button">Clear</button>
           </div>
+          <div class="finish-check" id="cFinishBox" hidden>
+            <h3 id="cFinishTitle"></h3>
+            <dl class="kv" id="cFinishKv"></dl>
+            <p class="hint" id="cFinishNote"></p>
+            <div class="btns"><button class="btn primary" id="cFinishOk" type="button">OK, finish the carcass</button><button class="btn" id="cFinishNo" type="button">Cancel</button></div>
+          </div>
           <div id="cOpenWrap"><h3 style="margin-bottom:6px">Or tap one</h3><div class="chips" id="cOpen"></div></div>
         </div>
         <div class="panel">
-          <div><h2>Product</h2><p class="hint">Tap a product, scan its barcode, or search.</p></div>
+          <div><h2>Product</h2><p class="hint">Tap a product, scan its barcode, or search. Products are grouped by animal.</p></div>
           <input id="cProdSearch" placeholder="Search or scan product barcode" autocomplete="off">
-          <div class="products" id="cProducts"></div>
+          <div class="pgroups" id="cProducts"></div>
           <p class="empty" id="cProdEmpty" hidden>No products for this animal. Add them in Settings.</p>
         </div>
         <form class="panel" id="wPanel" hidden>
@@ -261,9 +267,9 @@
         </div>
         <div class="stack">
           <div class="panel">
-            <div><h2>New product</h2><p class="hint">Tap a product, scan its barcode, or search.</p></div>
+            <div><h2>New product</h2><p class="hint">Units can only become minced meat of the same animal. Tap it, scan its barcode, or search.</p></div>
             <input id="xProdSearch" placeholder="Search or scan product barcode" autocomplete="off">
-            <div class="products" id="xProducts"></div>
+            <div id="xProducts"></div>
           </div>
           <form class="panel" id="xPrintForm">
             <h2 id="xSelTitle">Choose the new product</h2>

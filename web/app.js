@@ -791,15 +791,17 @@ loaders.counter = async () => {
 // Find the Zid POS order for each counter sale that has no Zid number yet:
 // an order with the same products, rung up within 30 minutes of the scan. Only a clear match is linked.
 // Zid order times are read both as shop time and as UTC, because POS orders may use either.
-let linking = false;
+let linking = false, lastLink = 0;
 const hhmm = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?';
-async function autoLinkCounter(manual = false) {
-  if (linking) return; linking = true;
+async function autoLinkCounter(manual = false, force = false) {
+  // Zid allows about 60 requests a minute, so the automatic check runs at most every 2 minutes
+  if (linking || (!manual && !force && Date.now() - lastLink < 120000)) return;
+  linking = true; lastLink = Date.now();
   let reload = false;
   try {
     const sales = (await api.recentOrders('counter', 30)).filter(o => TEMP_REF.test(o.ref) && Date.now() - Date.parse(o.created_at) < 6 * 3600e3);
     if (!sales.length) { if (manual) msg($('kLinkMsg'), 'Every recent sale already has its Zid order.', 'ok'); return; }
-    const zr = await api.zid('recent_orders', { since_minutes: 480 });
+    const zr = await api.zid('recent_orders', { since_minutes: 480, around: sales.map(o => o.created_at) });
     const zidOrders = zr.orders || [];
     const taken = new Set((await api.ordersByRefs(zidOrders.map(z => z.id))).map(r => r.ref));
     const free = zidOrders.filter(z => !taken.has(z.id));
@@ -914,7 +916,7 @@ $('kConfirm').addEventListener('click', async () => {
     }
     msgHtml($('kResult'), `<strong>Sale recorded.${zidLine}${ref ? '' : ' The Meatrix will find its Zid POS order by itself.'}</strong> <span class="code">${esc(o.trace_summary)}</span>`, ref && !zidLine.startsWith(' Could') ? 'ok' : (ref ? 'warn' : 'ok'));
     state.counter.items = []; $('kReceipt').value = ''; renderCounter(); loaders.counter(); $('kScan').focus();
-    if (!ref) setTimeout(() => autoLinkCounter(), 45000);
+    if (!ref) setTimeout(() => autoLinkCounter(false, true), 60000);
   } catch (err) { msg($('kMsg'), 'Could not record: ' + errText(err), 'err'); $('kConfirm').disabled = false; }
 });
 

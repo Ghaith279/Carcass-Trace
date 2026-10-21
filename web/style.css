@@ -148,3 +148,9 @@ table.matrix tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
 .pgroup summary { cursor: pointer; font-weight: 700; padding: 10px 2px; }
 .pgroup[open] summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
 .pgroup .products { padding-bottom: 10px; }
+
+.ask { border: 2px solid var(--warn); border-radius: 12px; padding: 18px; max-width: min(440px, calc(100vw - 32px)); background: var(--panel); color: var(--ink); }
+.ask::backdrop { background: rgba(0, 0, 0, .45); }
+.ask form { display: flex; flex-direction: column; gap: 10px; }
+.ask h3 { margin: 0; font-size: 18px; }
+.ask p { margin: 0; }

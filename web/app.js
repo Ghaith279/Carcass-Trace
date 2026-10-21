@@ -22,6 +22,15 @@ const showYmd = s => { if (!s) return ''; const [y, m, d] = String(s).split('-')
 const errText = e => (e && e.message) ? e.message : String(e);
 function msg(el, text, kind = 'info') { el.innerHTML = text ? `<div class="msg ${kind}">${esc(text)}</div>` : ''; }
 function msgHtml(el, html, kind = 'info') { el.innerHTML = `<div class="msg ${kind}">${html}</div>`; }
+// "Are you sure?" before a step that is hard to undo. Cancel has the focus, so a stray scan or Enter does nothing.
+function ask(title, body = '', ok = 'Yes, go ahead') {
+  return new Promise(res => {
+    const d = $('askBox');
+    $('askTitle').textContent = title; $('askBody').innerHTML = body; $('askOk').textContent = ok;
+    d.returnValue = ''; d.onclose = () => res(d.returnValue === 'ok');
+    d.showModal(); $('askNo').focus();
+  });
+}
 function onEnter(input, fn) {
   input.addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
@@ -201,7 +210,10 @@ async function pickCarcass(raw) {
     if (!c) { msg($('cMsg'), `No carcass ${no}. Check the label.`, 'err'); return; }
     if (c.status === 'sold_whole') { msg($('cMsg'), `Carcass ${no} was sold whole and cannot be cut.`, 'err'); return; }
     const cut = state.cut;
-    if ($('cBatch').checked) { if (!cut.active.some(a => a.id === c.id)) cut.active.push(c); }
+    if ($('cBatch').checked) {
+      if (cut.active.length && cut.active[0].species !== c.species) { msg($('cMsg'), `${no} is ${c.species}. A batch can only mix carcasses of the same animal (${cut.active[0].species}).`, 'err'); return; }
+      if (!cut.active.some(a => a.id === c.id)) cut.active.push(c);
+    }
     else {
       if (cut.active.length === 1 && cut.active[0].id !== c.id) msg($('cMsg'), `Switched to ${no}. Make sure the block is clear.`, 'warn'); else msg($('cMsg'), '');
       cut.active = [c];
@@ -279,17 +291,22 @@ function productsForCut() {
   const sp = state.cut.active[0]?.species;
   return state.products.filter(p => p.active && (!sp || !p.species || p.species === sp));
 }
+const short = v => kg(v, 3).replace(/0+$/, '').replace(/\.$/, '');
+const weightText = p => p.fixed_weight_kg ? short(p.fixed_weight_kg) + ' kg'
+  : p.min_weight_kg && p.max_weight_kg ? `${short(p.min_weight_kg)}–${short(p.max_weight_kg)} kg`
+  : p.min_weight_kg ? `from ${short(p.min_weight_kg)} kg` : 'per kg';
 // Products grouped by animal: the given animals first and open, products for any animal next,
-// the other animals folded underneath so any product can still be picked
-function productGroups(q, own, sel, attr, otherNote) {
-  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`;
+// the other animals folded underneath (or left out when onlyOwn is set)
+function productGroups(q, own, sel, attr, otherNote, onlyOwn = false) {
+  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`;
   const byName = (a, b) => (b.quick ? 1 : 0) - (a.quick ? 1 : 0) || String(a.name).localeCompare(String(b.name));
   let all = state.products.filter(p => p.active);
   if (q) all = all.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
   const names = state.species.map(x => x.name);
   all.forEach(p => { if (p.species && !names.includes(p.species)) names.push(p.species); });
   const order = [...own, '', ...names.filter(n => !own.includes(n))];
-  const groups = order.map(n => ({ n, items: all.filter(p => (p.species || '') === n).sort(byName) })).filter(g => g.items.length);
+  const groups = order.filter(n => !onlyOwn || !own.length || n === '' || own.includes(n))
+    .map(n => ({ n, items: all.filter(p => (p.species || '') === n).sort(byName) })).filter(g => g.items.length);
   const html = groups.map(g => {
     const open = q || !own.length || own.includes(g.n) || g.n === '' || g.items.some(p => p.id === sel);
     const label = g.n ? g.n : 'Any animal';
@@ -301,7 +318,7 @@ function productGroups(q, own, sel, attr, otherNote) {
 function renderProducts() {
   const q = $('cProdSearch').value.trim().toLowerCase();
   const sp = state.cut.active[0]?.species;
-  const g = productGroups(q, sp ? [sp] : [], state.cut.product?.id, 'prod', true);
+  const g = productGroups(q, sp ? [sp] : [], state.cut.product?.id, 'prod', true, true);
   $('cProdEmpty').hidden = !g.empty;
   $('cProdEmpty').textContent = q ? `No product matches "${$('cProdSearch').value.trim()}".` : 'No products yet. Load them from Zid in Settings.';
   $('cProducts').innerHTML = g.html;
@@ -314,14 +331,16 @@ $('cProdSearch').addEventListener('keydown', e => {
   const hit = state.products.find(p => p.active && (p.barcode === q || p.sku === q));
   const match = state.products.filter(p => p.active && [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
   const own = productsForCut().filter(p => match.includes(p));
-  const list = own.length ? own : match;
+  const list = state.cut.active.length || own.length ? own : match;
   const p = hit || (list.length === 1 ? list[0] : null);
-  if (p) { $('cProdSearch').value = ''; selectProduct(p); } else msg($('cMsg'), `No single product matches "${q}".`, 'warn');
+  const other = !p && !list.length && match.length && state.cut.active.length;
+  if (p) { $('cProdSearch').value = ''; selectProduct(p); }
+  else msg($('cMsg'), other ? `"${q}" is not a ${state.cut.active[0].species} product, so it cannot be made from this carcass.` : `No single product matches "${q}".`, other ? 'err' : 'warn');
 });
 $('cProducts').addEventListener('click', e => { const b = e.target.closest('[data-prod]'); if (b) selectProduct(state.productsById[b.dataset.prod]); });
 function selectProduct(p) {
   const sp = state.cut.active[0]?.species;
-  if (p.species && sp && p.species !== sp) { msg($('cMsg'), `${p.name} is set up as a ${p.species.toLowerCase()} product.`, 'warn'); }
+  if (p.species && sp && p.species !== sp) { msg($('cMsg'), `${p.name} is a ${p.species} product and cannot be made from a ${sp} carcass.`, 'err'); return; }
   state.cut.product = p;
   $('cWeight').value = p.fixed_weight_kg ? Number(p.fixed_weight_kg) : '';
   $('cCount').value = 1;
@@ -334,7 +353,7 @@ function renderSelected() {
   $('cPrintBtn').disabled = !p;
   if (!p) { $('cSelTitle').textContent = 'Choose a product'; $('cSelInfo').textContent = 'Labels will show the product, weight, carcass number and consume-before date.'; return; }
   $('cSelTitle').textContent = p.name;
-  $('cSelInfo').textContent = `${p.fixed_weight_kg ? 'Fixed weight' : 'Weigh each unit'} · consume before ${showYmd(addDays(p.shelf_life_days))} (${p.shelf_life_days} days)`;
+  $('cSelInfo').textContent = `${p.fixed_weight_kg ? 'Fixed weight' : p.min_weight_kg ? `Weigh it: ${weightText(p)}` : 'Weigh each unit'} · consume before ${showYmd(addDays(p.shelf_life_days))} (${p.shelf_life_days} days)`;
   updatePrintLabel();
 }
 function updatePrintLabel() { const n = Math.max(1, parseInt($('cCount').value, 10) || 1); $('cPrintBtn').textContent = `Print ${n} label${n === 1 ? '' : 's'}`; }
@@ -350,6 +369,10 @@ $('cPrintForm').addEventListener('submit', async e => {
   const count = parseInt($('cCount').value, 10), weight = num($('cWeight').value);
   if (!(count >= 1 && count <= 200)) { msg($('cMsg'), 'Number of units must be between 1 and 200.', 'err'); return; }
   if (!(weight > 0)) { msg($('cMsg'), 'Enter the unit weight.', 'err'); $('cWeight').focus(); return; }
+  if (product.species && active.some(c => c.species !== product.species)) { msg($('cMsg'), `${product.name} is a ${product.species} product. Choose a product for this animal.`, 'err'); return; }
+  const min = num(product.min_weight_kg), max = num(product.max_weight_kg);
+  if (min > 0 && weight < min) { msg($('cMsg'), `${product.name} must weigh at least ${short(min)} kg. This one is ${short(weight)} kg.`, 'err'); $('cWeight').focus(); $('cWeight').select(); return; }
+  if (max > 0 && weight > max && !(await ask(`${short(weight)} kg is over the usual weight`, `<p>${esc(product.name)} is normally ${esc(weightText(product))}. Print it at ${esc(short(weight))} kg anyway?</p>`, 'Yes, print it'))) { $('cWeight').focus(); return; }
   $('cPrintBtn').disabled = true;
   try {
     const trays = await api.createTrays(product.id, active.map(c => c.id), count,
@@ -381,7 +404,7 @@ $('cRows').addEventListener('click', async e => {
   const rp = e.target.closest('[data-reprint-tray]');
   if (rp) { try { const t = await api.trayByCode(rp.dataset.reprintTray); print([{ kind: 'tray', data: t }]); } catch (err) { msg($('cMsg'), errText(err), 'err'); } return; }
   const b = e.target.closest('[data-void]'); if (!b) return;
-  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = 'Tap again to delete'; return; }
+  if (!(await ask(`Delete label ${b.dataset.void}?`, '<p>The unit is removed from stock and its weight goes back to the carcass. Throw away the printed label.</p>', 'Yes, delete it'))) return;
   try { await api.voidTray(b.dataset.void); msg($('cMsg'), `Label ${b.dataset.void} deleted. Throw away the printed label.`, 'info'); renderCutTrays(); }
   catch (err) { msg($('cMsg'), errText(err), 'err'); }
 });
@@ -448,7 +471,7 @@ function renderRepro() {
   const q = $('xProdSearch').value.trim().toLowerCase();
   const sp = reproAnimal(), list = reproProducts().filter(p => !q || [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
   $('xProducts').innerHTML = list.length
-    ? `<div class="products">${list.map(p => `<button type="button" data-xprod="${esc(p.id)}" aria-pressed="${p.id === product?.id}">${esc(p.name)}<span>${p.fixed_weight_kg ? kg(p.fixed_weight_kg, 3).replace(/0+$/, '').replace(/\.$/, '') + ' kg' : 'weighed'} · ${p.shelf_life_days} days</span></button>`).join('')}</div>`
+    ? `<div class="products">${list.map(p => `<button type="button" data-xprod="${esc(p.id)}" aria-pressed="${p.id === product?.id}">${esc(p.name)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`).join('')}</div>`
     : `<p class="empty">${!sp ? 'Scan the units first. Their minced meat shows here.' : q ? `No ${esc(sp.toLowerCase())} minced meat matches "${esc($('xProdSearch').value.trim())}".` : `No minced meat is set up for ${esc(sp.toLowerCase())}. In Settings › Products, set the animal of its minced meat product to ${esc(sp)}.`}</p>`;
   $('xPrintBtn').disabled = !product || !items.length;
   if (product) {
@@ -500,6 +523,8 @@ $('xPrintForm').addEventListener('submit', async e => {
   const count = parseInt($('xCount').value, 10), weight = num($('xWeight').value);
   if (!(count >= 1 && count <= 200)) { msg($('xResult'), 'Number of units must be between 1 and 200.', 'err'); return; }
   if (!(weight > 0)) { msg($('xResult'), 'Enter the unit weight.', 'err'); $('xWeight').focus(); return; }
+  const inKg0 = items.reduce((s, it) => s + num(it.weight_kg), 0);
+  if (!(await ask(`Reproduce ${items.length} unit${items.length > 1 ? 's' : ''}?`, `<p>${items.length} unit(s), ${esc(kg(inKg0, 3))} kg, become ${count} × ${esc(product.name)} (${esc(kg(count * weight, 3))} kg). The old labels stop working.</p>`, 'Yes, reproduce'))) return;
   $('xPrintBtn').disabled = true;
   try {
     const trays = await api.reproduceTrays(items.map(i => i.code), product.id, count, weight, butcherId());
@@ -634,7 +659,7 @@ async function lookupItem(raw) {
   const c = await api.carcassByNo(code.toUpperCase());
   if (c) {
     if (c.status === 'sold_whole') throw new Error(`Carcass ${c.no} was already sold whole.`);
-    return { kind: 'carcass', code: c.no, label: `Whole ${c.species.toLowerCase()}`, carcasses: [c.no], weight_kg: c.weight_kg };
+    return { kind: 'carcass', code: c.no, label: `Whole ${c.species.toLowerCase()}`, carcasses: [c.no], species: [c.species], weight_kg: c.weight_kg };
   }
   throw new Error(`Nothing found for ${code}. Was the label printed by this system?`);
 }
@@ -709,6 +734,11 @@ onEnter($('pScan'), async v => {
     const lines = orderLines();
     if (lines.length && it.kind === 'tray') {
       const line = lines.find(l => l.local.includes(it.product_id));
+      // the order's animals: a line for any animal, or one not set up here, allows every animal
+      const animals = lines.flatMap(l => l.local.length ? l.local.map(id => state.productsById[id]?.species || '*') : ['*']);
+      if (!line && !animals.includes('*') && !it.species.some(sp => animals.includes(sp))) {
+        msg($('pMsg'), `${it.label} is ${it.species.join(' + ')}. This order is for ${[...new Set(animals)].join(', ')} only. Put it back.`, 'err'); return;
+      }
       if (!line) it.warn = 'Not in this order';
       else if (line.packed >= line.quantity) it.warn = 'More than ordered';
     }
@@ -720,6 +750,8 @@ onEnter($('pScan'), async v => {
 $('pRows').addEventListener('click', e => { const b = e.target.closest('[data-rm-p]'); if (!b) return; state.pack.items.splice(+b.dataset.rmP, 1); renderPack(); $('pScan').focus(); });
 $('pConfirm').addEventListener('click', async () => {
   const { order, items } = state.pack; if (!order || !items.length) return;
+  const warned = items.filter(i => i.warn).length;
+  if (!(await ask(`Finish packing order ${order.id}?`, `<p>${items.length} unit(s) leave stock and the carcass numbers are added to the Zid order.${warned ? ` <strong>${warned} unit(s) have a warning.</strong>` : ''}</p>`, 'Yes, finish packing'))) return;
   $('pConfirm').disabled = true;
   try {
     const o = await api.sellItems(items.map(i => i.code), 'online', order.id, order.customer);
@@ -757,52 +789,64 @@ loaders.counter = async () => {
 };
 
 // Find the Zid POS order for each counter sale that has no Zid number yet:
-// the same products, rung up within 20 minutes of the scan. Only a clear match is linked.
+// an order with the same products, rung up within 30 minutes of the scan. Only a clear match is linked.
+// Zid order times are read both as shop time and as UTC, because POS orders may use either.
 let linking = false;
+const hhmm = t => t ? new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '?';
 async function autoLinkCounter(manual = false) {
   if (linking) return; linking = true;
   let reload = false;
   try {
     const sales = (await api.recentOrders('counter', 30)).filter(o => TEMP_REF.test(o.ref) && Date.now() - Date.parse(o.created_at) < 6 * 3600e3);
     if (!sales.length) { if (manual) msg($('kLinkMsg'), 'Every recent sale already has its Zid order.', 'ok'); return; }
-    const { orders: zidOrders = [], listed = 0 } = await api.zid('recent_orders', { since_minutes: 420 });
+    const zr = await api.zid('recent_orders', { since_minutes: 480 });
+    const zidOrders = zr.orders || [];
     const taken = new Set((await api.ordersByRefs(zidOrders.map(z => z.id))).map(r => r.ref));
     const free = zidOrders.filter(z => !taken.has(z.id));
     const trays = await api.traysForOrders(sales.map(o => o.ref));
     const localIds = op => state.products.filter(p => (op.zid_product_id && p.zid_product_id === op.zid_product_id) || (op.barcode && p.barcode === op.barcode) || (op.sku && p.sku === op.sku)).map(p => p.id);
     const used = new Set(); let linked = 0, unclear = 0;
+    const why = [];
     for (const sale of sales.slice().sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))) {
       const mine = trays.filter(t => t.order_ref === sale.ref);
-      if (!mine.length) continue;   // whole carcasses only: link by hand
+      if (!mine.length) { why.push(`${hhmm(sale.created_at)} sale: whole carcass, link it by hand.`); continue; }
       const count = {}; mine.forEach(t => { count[t.product_id] = (count[t.product_id] || 0) + 1; });
       const want = Object.keys(count);
-      const cands = [];
+      const cands = []; let near = null;
       for (const z of free) {
-        if (used.has(z.id) || !z.created_at) continue;
-        const dt = Math.abs(Date.parse(z.created_at) - Date.parse(sale.created_at)) / 60000;
-        if (dt > 20) continue;
-        const lines = (z.products || []).map(l => ({ ids: localIds(l), q: l.quantity }));
-        if (!lines.length || lines.some(l => !l.ids.length)) continue;
-        if (!want.every(pid => lines.some(l => l.ids.includes(pid)))) continue;
-        if (!lines.every(l => l.ids.some(id => want.includes(id)))) continue;
+        if (used.has(z.id)) continue;
+        const times = [z.created_at, z.created_at_utc].filter(Boolean).map(t => Math.abs(Date.parse(t) - Date.parse(sale.created_at)) / 60000);
+        if (!times.length) continue;
+        const dt = Math.min(...times);
+        const lines = (z.products || []).map(l => ({ ids: localIds(l), q: l.quantity, name: l.name || l.sku || '?' }));
+        const hits = want.filter(pid => lines.some(l => l.ids.includes(pid))).length;
+        if (!near || dt < near.dt) near = { z, dt, hits, lines };
+        if (dt > 30 || hits < want.length) continue;
+        // extra POS lines (a bag, something not scanned) are allowed but make a match weaker
+        const extra = lines.filter(l => !l.ids.some(id => want.includes(id))).length;
         // whole-number quantities should match the number of units; weights in kg are not compared
-        let off = 0;
-        want.forEach(pid => { const l = lines.find(x => x.ids.includes(pid)); if (Number.isInteger(l.q)) off += Math.abs(l.q - count[pid]); });
+        let off = extra;
+        want.forEach(pid => { const l = lines.find(x => x.ids.includes(pid)); if (Number.isInteger(l.q) && l.q > 1) off += Math.abs(l.q - count[pid]); });
         cands.push({ z, dt, off });
       }
       cands.sort((a, b) => a.off - b.off || a.dt - b.dt);
       const [best, next] = cands;
-      if (!best) continue;
-      if (next && next.off === best.off && next.dt - best.dt < 3) { unclear++; continue; }
+      if (!best) {
+        why.push(!near ? `${hhmm(sale.created_at)} sale: Zid sent no unlinked order to compare.`
+          : `${hhmm(sale.created_at)} sale: closest Zid order ${near.z.code || near.z.id} is ${Math.round(near.dt)} min away and has ${near.hits} of ${want.length} products (${near.lines.map(l => l.name).join(', ') || 'no products'}).`);
+        continue;
+      }
+      if (next && next.off === best.off && next.dt - best.dt < 3) { unclear++; why.push(`${hhmm(sale.created_at)} sale: Zid orders ${best.z.code || best.z.id} and ${next.z.code || next.z.id} both fit.`); continue; }
       try {
         await api.linkCounterSale(sale.ref, best.z.id);
         used.add(best.z.id); linked++; reload = true;
         try { await api.zid('post_comment', { order_ref: best.z.id }); } catch (_) {}
-      } catch (_) {}
+      } catch (err) { why.push(`${hhmm(sale.created_at)} sale: could not link to ${best.z.code || best.z.id} (${errText(err)}).`); }
     }
     if (manual) {
       const left = sales.length - linked;
-      msg($('kLinkMsg'), `${linked ? `Linked ${linked} sale${linked > 1 ? 's' : ''} to Zid. ` : ''}${left ? `${left} still waiting${unclear ? `, ${unclear} with more than one possible POS order` : ''}. Type the Zid order number next to ${left > 1 ? 'them' : 'it'}.` : ''}${!listed ? ' Zid returned no recent orders.' : ''}`, left ? 'warn' : 'ok');
+      const info = `Zid listed ${zr.listed ?? 0} orders${zr.newest ? `, newest at ${hhmm(zr.newest)}` : ''}; ${zr.in_window ?? zidOrders.length} from the last 8 hours.`;
+      msgHtml($('kLinkMsg'), `${linked ? `Linked ${linked} sale${linked > 1 ? 's' : ''} to Zid. ` : ''}${left ? `${left} still waiting. Type the Zid order number next to ${left > 1 ? 'them' : 'it'}.` : ''}<div class="hint" style="margin-top:6px">${esc(info)}${why.slice(0, 4).map(w => `<br>${esc(w)}`).join('')}</div>`, left ? 'warn' : 'ok');
     }
   } catch (err) { if (manual) msg($('kLinkMsg'), 'Could not check Zid: ' + errText(err), 'err'); }
   finally { linking = false; }
@@ -857,6 +901,8 @@ onEnter($('kScan'), async v => {
 $('kRows').addEventListener('click', e => { const b = e.target.closest('[data-rm-k]'); if (!b) return; state.counter.items.splice(+b.dataset.rmK, 1); renderCounter(); $('kScan').focus(); });
 $('kConfirm').addEventListener('click', async () => {
   const items = state.counter.items; if (!items.length) return;
+  const whole = items.filter(i => i.kind === 'carcass');
+  if (!(await ask(`Record this sale of ${items.length} item${items.length > 1 ? 's' : ''}?`, `<p>${esc(kg(items.reduce((s, i) => s + num(i.weight_kg), 0), 3))} kg leave stock.${whole.length ? ` <strong>Whole carcass sold: ${whole.map(i => esc(i.code)).join(', ')}.</strong> It cannot be cut after this.` : ''}</p>`, 'Yes, record the sale'))) return;
   $('kConfirm').disabled = true;
   try {
     const ref = $('kReceipt').value.trim();
@@ -901,8 +947,7 @@ $('sTrays').addEventListener('change', updateWriteOff);
 $('sAll').addEventListener('change', () => { document.querySelectorAll('#sTrays [data-sel]').forEach(i => { i.checked = $('sAll').checked; }); updateWriteOff(); });
 $('sWriteOff').addEventListener('click', async () => {
   const b = $('sWriteOff'), codes = selectedCodes(); if (!codes.length) return;
-  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = `Tap again to confirm (${codes.length})`; return; }
-  b.dataset.confirm = '';
+  if (!(await ask(`Take ${codes.length} unit${codes.length > 1 ? 's' : ''} out of stock?`, `<p>Reason: ${esc($('sReason').value)}. This cannot be undone.</p>`, 'Yes, take them out'))) return;
   try { const n = await api.writeOff(codes, $('sReason').value); msg($('sMsg'), `${n} unit(s) taken out of stock: ${$('sReason').value}.`, 'ok'); loaders.stock(); }
   catch (err) { msg($('sMsg'), errText(err), 'err'); }
 });
@@ -1030,7 +1075,7 @@ async function runTrace(q) {
 $('tOut').addEventListener('click', async e => {
   const b = e.target.closest('[data-del-carcass]'); if (!b) return;
   const no = b.dataset.delCarcass;
-  if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = `Tap again to delete ${no} and its units`; return; }
+  if (!(await ask(`Delete carcass ${no}?`, '<p>The carcass and every unit made only from it are deleted. This cannot be undone.</p>', 'Yes, delete it'))) return;
   try {
     const n = await api.deleteCarcass(no);
     $('tOut').innerHTML = `<div class="msg ok">${esc(no)} deleted, with ${n} unit(s) made only from it.</div>`;
@@ -1060,6 +1105,8 @@ onEnter($('ckScan'), v => {
 });
 $('ckCancel').addEventListener('click', () => { check.on = false; $('ckWork').hidden = true; $('ckStart').hidden = false; });
 $('ckFinish').addEventListener('click', async () => {
+  const found = [...check.codes].filter(c => check.expected.has(c)).length;
+  if (!(await ask('Finish the stock check?', `<p>${found} of ${check.expected.size} units scanned.${check.expected.size - found ? ` <strong>${check.expected.size - found} not scanned</strong> will be listed as missing.` : ''}</p>`, 'Yes, finish'))) return;
   try {
     const r = await api.saveStockCheck([...check.codes]);
     check.on = false; $('ckWork').hidden = true; $('ckStart').hidden = false;
@@ -1067,7 +1114,7 @@ $('ckFinish').addEventListener('click', async () => {
     msgHtml($('ckResult'), `<strong>Stock check saved.</strong> ${r.found} of ${r.expected} units found.${missing.length ? ` <strong>${missing.length} missing:</strong> <span class="code">${missing.map(esc).join(', ')}</span>.` : ' Nothing is missing.'}${extra.length ? ` Scanned but not in stock: <span class="code">${extra.map(esc).join(', ')}</span>.` : ''}${missing.length ? '<div class="btns admin-only" style="margin-top:8px"><button class="btn danger" type="button" id="ckWriteOff">Take the missing units out of stock</button></div>' : ''}`, missing.length ? 'warn' : 'ok');
     const b = $('ckWriteOff');
     if (b) b.addEventListener('click', async () => {
-      if (b.dataset.confirm !== '1') { b.dataset.confirm = '1'; b.textContent = `Tap again to take ${missing.length} out of stock`; return; }
+      if (!(await ask(`Take the ${missing.length} missing unit${missing.length > 1 ? 's' : ''} out of stock?`, '<p>Reason: missing at stock check. This cannot be undone.</p>', 'Yes, take them out'))) return;
       try { const n = await api.writeOff(missing, 'Missing at stock check'); b.replaceWith(Object.assign(document.createElement('span'), { textContent: `${n} unit(s) taken out of stock.` })); loaders.stock(); }
       catch (err) { msg($('ckMsg'), errText(err), 'err'); }
     });
@@ -1117,7 +1164,7 @@ $('rcXl').addEventListener('click', () => {
 /* ---------------- settings ---------------- */
 loaders.settings = async () => {
   const s = state.settings;
-  $('stW').value = s.label_width_mm; $('stH').value = s.label_height_mm; $('stWarn').value = s.expiry_warning_days; $('stTz').value = s.timezone; $('stTemp').value = s.max_arrival_temp_c ?? 7;
+  $('stW').value = s.label_width_mm; $('stH').value = s.label_height_mm; $('stCW').value = s.carcass_label_width_mm ?? 100; $('stCH').value = s.carcass_label_height_mm ?? 100; $('stWarn').value = s.expiry_warning_days; $('stTz').value = s.timezone; $('stTemp').value = s.max_arrival_temp_c ?? 7;
   $('zConnect').href = api.zidConnectUrl ? api.zidConnectUrl() : '#';
   renderProductSettings();
   renderSpeciesSettings();
@@ -1137,6 +1184,8 @@ function renderProductSettings() {
     <td class="code">${esc(p.barcode || p.sku || '')}</td>
     <td><select data-f="species"><option value="">Any</option>${state.species.map(s => `<option ${p.species === s.name ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></td>
     <td><input data-f="fixed_weight_kg" type="number" step="0.001" min="0" value="${p.fixed_weight_kg ?? ''}" style="width:90px" aria-label="Fixed weight in kg"></td>
+    <td><input data-f="min_weight_kg" type="number" step="0.001" min="0" value="${p.min_weight_kg ?? ''}" style="width:80px" aria-label="Minimum kg"></td>
+    <td><input data-f="max_weight_kg" type="number" step="0.001" min="0" value="${p.max_weight_kg ?? ''}" style="width:80px" aria-label="Maximum kg"></td>
     <td><input data-f="shelf_life_days" type="number" min="0" max="365" value="${p.shelf_life_days}" style="width:70px" aria-label="Shelf life in days"></td>
     <td><input data-f="quick" type="checkbox" ${p.quick ? 'checked' : ''} aria-label="Show as button"></td>
     <td><input data-f="active" type="checkbox" ${p.active ? 'checked' : ''} aria-label="In use"></td></tr>`).join('');
@@ -1147,7 +1196,7 @@ $('prRows').addEventListener('change', async e => {
   const f = el.dataset.f;
   let v = el.type === 'checkbox' ? el.checked : el.value;
   if (f === 'species') v = v || null;
-  if (f === 'fixed_weight_kg') v = num(v) > 0 ? num(v) : null;
+  if (['fixed_weight_kg', 'min_weight_kg', 'max_weight_kg'].includes(f)) v = num(v) > 0 ? num(v) : null;
   if (f === 'shelf_life_days') v = Math.max(0, parseInt(v, 10) || 0);
   try {
     const saved = await api.saveProduct(tr.dataset.pid, { [f]: v });
@@ -1248,9 +1297,16 @@ $('stSave').addEventListener('click', async () => {
     state.settings = await api.saveSettings({
       label_width_mm: parseInt($('stW').value, 10) || 50, label_height_mm: parseInt($('stH').value, 10) || 30,
       expiry_warning_days: parseInt($('stWarn').value, 10) || 0, timezone: $('stTz').value.trim() || 'Asia/Riyadh',
+      ...('carcass_label_width_mm' in state.settings ? { carcass_label_width_mm: parseInt($('stCW').value, 10) || 100, carcass_label_height_mm: parseInt($('stCH').value, 10) || 100 } : {}),
       ...('max_arrival_temp_c' in state.settings ? { max_arrival_temp_c: $('stTemp').value === '' ? 7 : num($('stTemp').value) } : {})
     });
     msg($('stMsg'), 'Saved.', 'ok');
+  } catch (err) { msg($('stMsg'), errText(err), 'err'); }
+});
+$('stTestC').addEventListener('click', () => {
+  try {
+    print([{ kind: 'carcass', data: { no: 'N0101-01', species: 'Naeemi', species_ar: 'نعيمي', ear_tag: '2231', farm: 'Test farm', received_at: new Date().toISOString(), chiller_use_by: addDays(5) } }]);
+    msg($('stMsg'), 'Test carcass label sent to the printer.', 'ok');
   } catch (err) { msg($('stMsg'), errText(err), 'err'); }
 });
 $('stTest').addEventListener('click', () => {

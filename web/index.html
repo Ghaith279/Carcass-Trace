@@ -469,7 +469,7 @@
           <div><h2>Products</h2><p class="hint">Set which animal each product comes from, its fixed weight (leave empty if weighed per unit) and shelf life. Tick "Button" for products the butchers use most.</p></div>
           <input id="prSearch" placeholder="Search products" autocomplete="off">
           <div class="table-wrap"><table>
-            <thead><tr><th>Product</th><th>Barcode</th><th>Animal</th><th>Fixed kg</th><th>Shelf life (days)</th><th>Button</th><th>In use</th></tr></thead>
+            <thead><tr><th>Product</th><th>Barcode</th><th>Animal</th><th>Fixed kg</th><th>Min kg</th><th>Max kg</th><th>Shelf life (days)</th><th>Button</th><th>In use</th></tr></thead>
             <tbody id="prRows"></tbody>
           </table></div>
           <p class="empty" id="prEmpty">No products yet. Load them from Zid or add one below.</p>
@@ -522,13 +522,17 @@
         <div class="panel">
           <h2>Labels and shop</h2>
           <div class="row3">
-            <label>Label width (mm)<input id="stW" type="number" min="20" max="120"></label>
-            <label>Label height (mm)<input id="stH" type="number" min="15" max="120"></label>
+            <label>Unit label width (mm)<input id="stW" type="number" min="20" max="120"></label>
+            <label>Unit label height (mm)<input id="stH" type="number" min="15" max="120"></label>
             <label>Warn days before consume-before<input id="stWarn" type="number" min="0" max="14"></label>
+          </div>
+          <div class="row3">
+            <label>Carcass label width (mm)<input id="stCW" type="number" min="40" max="120"></label>
+            <label>Carcass label height (mm)<input id="stCH" type="number" min="30" max="200"></label>
           </div>
           <label>Warn if a carcass arrives warmer than (°C)<input id="stTemp" type="number" step="0.1" min="-5" max="20"></label>
           <label>Time zone<input id="stTz" placeholder="Asia/Riyadh"></label>
-          <div class="btns"><button class="btn primary" id="stSave" type="button">Save</button><button class="btn" id="stTest" type="button">Print a test label</button></div>
+          <div class="btns"><button class="btn primary" id="stSave" type="button">Save</button><button class="btn" id="stTest" type="button">Print a test unit label</button><button class="btn" id="stTestC" type="button">Print a test carcass label</button></div>
           <div id="stMsg"></div>
         </div>
       </div>
@@ -537,5 +541,6 @@
 </div>
 <script type="module" src="app.js"></script>
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});</script>
+<dialog id="askBox" class="ask" aria-labelledby="askTitle"><form method="dialog"><h3 id="askTitle"></h3><div id="askBody"></div><div class="btns"><button class="btn primary" value="ok" id="askOk">Yes</button><button class="btn" value="no" id="askNo">Cancel</button></div></form></dialog>
 </body>
 </html>

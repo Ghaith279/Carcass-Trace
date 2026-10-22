@@ -96,6 +96,7 @@ export const api = {
   async deleteWaste(id) { return check(await sb.rpc('delete_waste', { p_id: id })); },
 
   // --- trays ---
+  async makeWholeUnit(carcassId, productId, weightKg, butcherId) { return check(await sb.rpc('make_whole_unit', { p_carcass_id: carcassId, p_product_id: productId, p_weight_kg: weightKg, p_butcher_id: butcherId || null })); },
   async createTrays(productId, carcassIds, count, weightKg, butcherId) {
     return check(await sb.rpc('create_trays', { p_product_id: productId, p_carcass_ids: carcassIds, p_count: count, p_weight_kg: weightKg ?? null, p_butcher_id: butcherId || null }));
   },

@@ -121,9 +121,18 @@ export const api = {
   async exportData(from, to) { return check(await sb.rpc('export_data', { p_from: from, p_to: to })); },
 
   // --- sales ---
-  async sellItems(codes, channel, orderRef, customer) {
-    return check(await sb.rpc('sell_items', { p_codes: codes, p_channel: channel, p_order_ref: orderRef || null, p_customer_name: customer || null }));
+  // whole: [{ no, product_id, weight_kg }] for each whole carcass in the sale
+  async sellItems(codes, channel, orderRef, customer, whole) {
+    const args = { p_codes: codes, p_channel: channel, p_order_ref: orderRef || null, p_customer_name: customer || null };
+    if (whole && whole.length) args.p_whole = whole;
+    return check(await sb.rpc('sell_items', args));
   },
+  // --- by-products sold in bulk from wastage ---
+  async byproductSources() { return check(await sb.from('byproduct_sources').select('product_id, kind, species')); },
+  async byproductStock() { return check(await sb.rpc('byproduct_stock')); },
+  async sellByproduct(productId, kg, customer, ref) { return check(await sb.rpc('sell_byproduct', { p_product_id: productId, p_weight_kg: kg, p_customer: customer || null, p_order_ref: ref || null })); },
+  async recentBulkSales() { return check(await sb.rpc('recent_bulk_sales', { p_limit: 30 })); },
+  async deleteBulkSale(id) { return check(await sb.rpc('delete_bulk_sale', { p_id: id })); },
   async order(ref) { return check(await sb.from('orders').select('*').eq('ref', ref).maybeSingle()); },
   async linkCounterSale(ref, zidRef) { return check(await sb.rpc('link_counter_sale', { p_ref: ref, p_zid_ref: zidRef })); },
   async ordersByRefs(refs) { return refs.length ? check(await sb.from('orders').select('ref').in('ref', refs)) : []; },

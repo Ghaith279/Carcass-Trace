@@ -164,3 +164,4 @@ td .ar { font-size: 13px; color: var(--muted); }
 .byp[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--accent-soft); }
 .byp-name { font-weight: 600; display: flex; flex-direction: column; }
 #wholeBox .products { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.psub.first { margin-top: 0; padding-top: 0; border-top: 0; }

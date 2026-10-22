@@ -165,3 +165,8 @@ td .ar { font-size: 13px; color: var(--muted); }
 .byp-name { font-weight: 600; display: flex; flex-direction: column; }
 #wholeBox .products { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 .psub.first { margin-top: 0; padding-top: 0; border-top: 0; }
+.sale-sum { font-size: 14px; }
+.sale-sum tfoot th { border-top: 2px solid var(--line); text-align: left; }
+.sale-sum tfoot th.num { text-align: right; }
+.ask { width: min(520px, calc(100vw - 32px)); }
+.ask .table-wrap { max-height: 50vh; overflow: auto; }

@@ -32,6 +32,7 @@ function msgHtml(el, html, kind = 'info') { el.innerHTML = `<div class="msg ${ki
 function ask(title, body = '', ok = 'Yes, go ahead') {
   return new Promise(res => {
     const d = $('askBox');
+    if (d.open) d.close('');
     $('askTitle').textContent = title; $('askBody').innerHTML = body; $('askOk').textContent = ok;
     d.returnValue = ''; d.onclose = () => res(d.returnValue === 'ok');
     d.showModal(); $('askNo').focus();
@@ -741,6 +742,17 @@ function wholeSale(it, msgEl) {
   });
 }
 const warnLine = it => it.warn ? `<div class="hint" style="color:var(--warn)">${esc(it.warn)}</div>` : '';
+// The products in a sale, one row each with how many units and their kg, for the confirmation box
+function saleTable(items) {
+  const g = new Map();
+  for (const it of items) {
+    const key = it.product_id || 'c:' + it.code;
+    if (!g.has(key)) { const p = state.productsById[it.product_id]; g.set(key, { en: enOf(p) || it.label, ar: arOf(p), n: 0, kg: 0 }); }
+    const r = g.get(key); r.n++; r.kg += num(it.weight_kg);
+  }
+  const rows = [...g.values()];
+  return `<div class="table-wrap"><table class="sale-sum"><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">kg</th></tr></thead><tbody>${rows.map(r => `<tr><td>${esc(r.en)}${r.ar ? `<div class="ar" lang="ar" dir="rtl">${esc(r.ar)}</div>` : ''}</td><td class="num">${r.n}</td><td class="num">${kg(r.kg, 3)}</td></tr>`).join('')}</tbody><tfoot><tr><th>Total</th><th class="num">${items.length}</th><th class="num">${kg(items.reduce((s, i) => s + num(i.weight_kg), 0), 3)}</th></tr></tfoot></table></div>`;
+}
 const itemAr = it => arDiv(state.productsById[it.product_id]);
 const itemRows = (items, attr) => items.map((it, i) => `<tr>${attr === 'p'
   ? `<td class="code">${esc(it.code)}</td><td>${esc(it.label)}${itemAr(it)}${warnLine(it)}</td>`
@@ -830,7 +842,7 @@ $('pRows').addEventListener('click', e => { const b = e.target.closest('[data-rm
 $('pConfirm').addEventListener('click', async () => {
   const { order, items } = state.pack; if (!order || !items.length) return;
   const warned = items.filter(i => i.warn).length;
-  if (!(await ask(`Finish packing order ${order.id}?`, `<p>${items.length} unit(s) leave stock and the carcass numbers are added to the Zid order.${warned ? ` <strong>${warned} unit(s) have a warning.</strong>` : ''}</p>`, 'Yes, finish packing'))) return;
+  if (!(await ask(`Finish packing order ${order.id}?`, `${saleTable(items)}<p>These leave stock and the carcass numbers are added to the Zid order.${warned ? ` <strong>${warned} unit(s) have a warning.</strong>` : ''}</p>`, 'Yes, finish packing'))) return;
   $('pConfirm').disabled = true;
   try {
     const o = await api.sellItems(items.map(i => i.code), 'online', order.id, order.customer, items.filter(i => i.whole).map(i => i.whole));
@@ -987,7 +999,7 @@ $('kRows').addEventListener('click', e => { const b = e.target.closest('[data-rm
 $('kConfirm').addEventListener('click', async () => {
   const items = state.counter.items; if (!items.length) return;
   const whole = items.filter(i => i.kind === 'carcass');
-  if (!(await ask(`Record this sale of ${items.length} item${items.length > 1 ? 's' : ''}?`, `<p>${esc(kg(items.reduce((s, i) => s + num(i.weight_kg), 0), 3))} kg leave stock.${whole.length ? ` <strong>Whole carcass sold: ${whole.map(i => esc(i.code)).join(', ')}.</strong> It cannot be cut after this.` : ''}</p>`, 'Yes, record the sale'))) return;
+  if (!(await ask(`Record this sale of ${items.length} item${items.length > 1 ? 's' : ''}?`, `${saleTable(items)}${whole.length ? `<p><strong>Whole carcass sold: ${whole.map(i => esc(i.code)).join(', ')}.</strong> It cannot be cut after this.</p>` : ''}<p class="hint">Check it matches what you rang up in Zid POS.</p>`, 'Yes, record the sale'))) return;
   $('kConfirm').disabled = true;
   try {
     const ref = $('kReceipt').value.trim();

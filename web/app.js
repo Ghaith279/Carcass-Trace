@@ -51,7 +51,7 @@ function useByChip(ymd) {
   return `<span class="chip">${showYmd(ymd)}</span>`;
 }
 const carcassNos = t => (t.carcasses || []).map(c => c.no);
-const WASTE = { trimmings: 'Trimmings', fat: 'Fat', bones: 'Bones', intestines: 'Intestines' };
+const WASTE = { trimmings: 'Trimmings', fat: 'Fat', bones: 'Bones', intestines: 'Intestines', head: 'Head', heart_kidneys: 'Heart & kidneys' };
 const pct = v => v == null ? '' : num(v).toFixed(1) + '%';
 // "22.0 kg received → 15.4 kg packed (70.0%) · 3.1 kg bones · 0.8 kg shrinkage (3.6%)"
 function breakdown(y) {
@@ -135,7 +135,12 @@ function butcherId() {
 async function loadProducts() {
   state.products = await api.products();
   state.productsById = Object.fromEntries(state.products.map(p => [p.id, p]));
+  // products sold in bulk from wastage are never cut into units
+  try { state.byp = new Set((await api.byproductSources()).map(r => r.product_id)); } catch (_) { state.byp = new Set(); }
 }
+// What the cutting room can make: not whole carcasses and not by-products from wastage
+const cuttable = p => p.active && !p.whole_carcass && !(state.byp && state.byp.has(p.id));
+const arName = p => p && p.name_ar ? `<bdi class="ar" lang="ar" dir="rtl">${esc(p.name_ar)}</bdi>` : '';
 
 /* ---------------- tabs ---------------- */
 const loaders = {};
@@ -289,7 +294,7 @@ $('cFinishOk').addEventListener('click', async () => {
 
 function productsForCut() {
   const sp = state.cut.active[0]?.species;
-  return state.products.filter(p => p.active && (!sp || !p.species || p.species === sp));
+  return state.products.filter(p => cuttable(p) && (!sp || !p.species || p.species === sp));
 }
 const short = v => kg(v, 3).replace(/0+$/, '').replace(/\.$/, '');
 const weightText = p => p.fixed_weight_kg ? short(p.fixed_weight_kg) + ' kg'
@@ -298,9 +303,9 @@ const weightText = p => p.fixed_weight_kg ? short(p.fixed_weight_kg) + ' kg'
 // Products grouped by animal: the given animals first and open, products for any animal next,
 // the other animals folded underneath (or left out when onlyOwn is set)
 function productGroups(q, own, sel, attr, otherNote, onlyOwn = false) {
-  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`;
+  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}${arName(p)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`;
   const byName = (a, b) => (b.quick ? 1 : 0) - (a.quick ? 1 : 0) || String(a.name).localeCompare(String(b.name));
-  let all = state.products.filter(p => p.active);
+  let all = state.products.filter(cuttable);
   if (q) all = all.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
   const names = state.species.map(x => x.name);
   all.forEach(p => { if (p.species && !names.includes(p.species)) names.push(p.species); });
@@ -311,7 +316,9 @@ function productGroups(q, own, sel, attr, otherNote, onlyOwn = false) {
     const open = q || !own.length || own.includes(g.n) || g.n === '' || g.items.some(p => p.id === sel);
     const label = g.n ? g.n : 'Any animal';
     const note = otherNote && own.length && g.n && !own.includes(g.n) ? ' <span class="hint">· other animal</span>' : '';
-    return `<details class="pgroup" ${open ? 'open' : ''}><summary>${esc(label)} <span class="hint">${g.items.length}</span>${note}</summary><div class="products">${g.items.slice(0, 80).map(btn).join('')}</div></details>`;
+    // shop products first, then this animal's B2B products in their own section
+    const shop = g.items.filter(p => !p.b2b), b2b = g.items.filter(p => p.b2b);
+    return `<details class="pgroup" ${open ? 'open' : ''}><summary>${esc(label)} <span class="hint">${g.items.length}</span>${note}</summary>${shop.length ? `<div class="products">${shop.slice(0, 80).map(btn).join('')}</div>` : ''}${b2b.length ? `<div class="psub">B2B <span class="hint">${b2b.length}</span></div><div class="products">${b2b.slice(0, 80).map(btn).join('')}</div>` : ''}</details>`;
   }).join('');
   return { html, empty: !groups.length };
 }
@@ -328,8 +335,8 @@ $('cProdSearch').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   e.preventDefault();
   const q = $('cProdSearch').value.trim();
-  const hit = state.products.find(p => p.active && (p.barcode === q || p.sku === q));
-  const match = state.products.filter(p => p.active && [p.name, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const hit = state.products.find(p => cuttable(p) && (p.barcode === q || p.sku === q));
+  const match = state.products.filter(p => cuttable(p) && [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
   const own = productsForCut().filter(p => match.includes(p));
   const list = state.cut.active.length || own.length ? own : match;
   const p = hit || (list.length === 1 ? list[0] : null);
@@ -352,7 +359,7 @@ function renderSelected() {
   const p = state.cut.product;
   $('cPrintBtn').disabled = !p;
   if (!p) { $('cSelTitle').textContent = 'Choose a product'; $('cSelInfo').textContent = 'Labels will show the product, weight, carcass number and consume-before date.'; return; }
-  $('cSelTitle').textContent = p.name;
+  $('cSelTitle').textContent = p.name + (p.name_ar ? ' · ' + p.name_ar : '');
   $('cSelInfo').textContent = `${p.fixed_weight_kg ? 'Fixed weight' : p.min_weight_kg ? `Weigh it: ${weightText(p)}` : 'Weigh each unit'} · consume before ${showYmd(addDays(p.shelf_life_days))} (${p.shelf_life_days} days)`;
   updatePrintLabel();
 }
@@ -393,7 +400,7 @@ async function renderCutTrays() {
     let trays = await api.traysForCarcass(a[0].id);
     if (a.length > 1) { const key = a.map(c => c.no).sort().join(','); trays = trays.filter(t => carcassNos(t).sort().join(',') === key); }
     $('cRowsEmpty').hidden = trays.length > 0; $('cRowsEmpty').textContent = 'No units yet.';
-    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger admin-only" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
+    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}${state.productsById[t.product_id]?.name_ar ? `<div class="ar" lang="ar" dir="rtl">${esc(state.productsById[t.product_id].name_ar)}</div>` : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger admin-only" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
     if (a.length === 1) {
       const packed = trays.reduce((s, t) => s + num(t.weight_kg) / Math.max(1, (t.carcasses || []).length), 0);
       $('cYield').textContent = `${trays.length} units · ${kg(packed)} kg packed from ${kg(a[0].weight_kg, 1)} kg received · ${Math.round(packed / num(a[0].weight_kg) * 100)}% yield so far`;
@@ -663,10 +670,42 @@ async function lookupItem(raw) {
   }
   throw new Error(`Nothing found for ${code}. Was the label printed by this system?`);
 }
+// A whole carcass at the till: which product it is sold as, and its weight on the scale now.
+// The carcass stays "sold whole"; the difference from the received weight is its shrinkage.
+function wholeSale(it, msgEl) {
+  const list = state.products.filter(p => p.active && p.whole_carcass && (!p.species || it.species.includes(p.species)))
+    .sort((a, b) => num(a.min_weight_kg) - num(b.min_weight_kg));
+  let pick = list.length === 1 ? list[0] : null, warned = false;
+  const d = $('wholeBox');
+  $('whTitle').textContent = `Sell carcass ${it.code} whole`;
+  $('whInfo').textContent = `${it.species.join(', ')} · received at ${kg(it.weight_kg, 2)} kg. Weigh it now and enter the weight.`;
+  const draw = () => {
+    $('whProducts').hidden = !list.length;
+    $('whProducts').innerHTML = list.map(p => `<button type="button" data-wh="${esc(p.id)}" aria-pressed="${p.id === pick?.id}">${esc(p.name)}${arName(p)}<span>${weightText(p)}</span></button>`).join('');
+  };
+  draw(); $('whWeight').value = ''; $('whMsg').innerHTML = '';
+  $('whProducts').onclick = e => { const b = e.target.closest('[data-wh]'); if (!b) return; pick = state.productsById[b.dataset.wh]; warned = false; draw(); $('whWeight').focus(); };
+  return new Promise(res => {
+    $('whForm').onsubmit = e => {
+      e.preventDefault();
+      const w = num($('whWeight').value);
+      if (list.length && !pick) { msg($('whMsg'), 'Choose what it is sold as.', 'err'); return; }
+      if (!(w > 0)) { msg($('whMsg'), 'Enter the weight from the scale.', 'err'); $('whWeight').focus(); return; }
+      const min = num(pick?.min_weight_kg), max = num(pick?.max_weight_kg);
+      if (min > 0 && w < min) { msg($('whMsg'), `${pick.name} must weigh at least ${short(min)} kg. This carcass is ${short(w)} kg.`, 'err'); return; }
+      if (max > 0 && w > max && !warned) { warned = true; msg($('whMsg'), `${short(w)} kg is over the usual ${weightText(pick)}. Press Add again to sell it anyway.`, 'warn'); return; }
+      Object.assign(it, { product_id: pick?.id || null, label: pick ? pick.name : it.label, weight_kg: w, whole: { no: it.code, product_id: pick?.id || null, weight_kg: w } });
+      d.close('ok'); res(true);
+    };
+    d.onclose = () => { if (d.returnValue !== 'ok') { msg(msgEl, `Carcass ${it.code} was not added.`, 'info'); res(false); } };
+    d.returnValue = ''; d.showModal(); $('whWeight').focus();
+  });
+}
 const warnLine = it => it.warn ? `<div class="hint" style="color:var(--warn)">${esc(it.warn)}</div>` : '';
+const itemAr = it => { const p = state.productsById[it.product_id]; return p?.name_ar ? `<div class="ar" lang="ar" dir="rtl">${esc(p.name_ar)}</div>` : ''; };
 const itemRows = (items, attr) => items.map((it, i) => `<tr>${attr === 'p'
-  ? `<td class="code">${esc(it.code)}</td><td>${esc(it.label)}${warnLine(it)}</td>`
-  : `<td>${esc(it.label)}<div class="hint code">${esc(it.code)}</div>${warnLine(it)}</td>`}<td class="code">${it.carcasses.map(esc).join('<br>')}</td><td class="num">${kg(it.weight_kg, 3)}</td><td><button class="btn small" type="button" data-rm-${attr}="${i}" aria-label="Remove">×</button></td></tr>`).join('');
+  ? `<td class="code">${esc(it.code)}</td><td>${esc(it.label)}${itemAr(it)}${warnLine(it)}</td>`
+  : `<td>${esc(it.label)}${itemAr(it)}<div class="hint code">${esc(it.code)}</div>${warnLine(it)}</td>`}<td class="code">${it.carcasses.map(esc).join('<br>')}</td><td class="num">${kg(it.weight_kg, 3)}</td><td><button class="btn small" type="button" data-rm-${attr}="${i}" aria-label="Remove">×</button></td></tr>`).join('');
 
 /* ---------------- online packing ---------------- */
 loaders.pack = async () => {
@@ -731,8 +770,9 @@ onEnter($('pScan'), async v => {
   if (items.some(i => i.code === v || i.code === v.toUpperCase())) { msg($('pMsg'), `${v} is already scanned.`, 'warn'); return; }
   try {
     const it = await lookupItem(v);
+    if (it.kind === 'carcass' && !(await wholeSale(it, $('pMsg')))) return;
     const lines = orderLines();
-    if (lines.length && it.kind === 'tray') {
+    if (lines.length && (it.kind === 'tray' || it.product_id)) {
       const line = lines.find(l => l.local.includes(it.product_id));
       // the order's animals: a line for any animal, or one not set up here, allows every animal
       const animals = lines.flatMap(l => l.local.length ? l.local.map(id => state.productsById[id]?.species || '*') : ['*']);
@@ -754,7 +794,7 @@ $('pConfirm').addEventListener('click', async () => {
   if (!(await ask(`Finish packing order ${order.id}?`, `<p>${items.length} unit(s) leave stock and the carcass numbers are added to the Zid order.${warned ? ` <strong>${warned} unit(s) have a warning.</strong>` : ''}</p>`, 'Yes, finish packing'))) return;
   $('pConfirm').disabled = true;
   try {
-    const o = await api.sellItems(items.map(i => i.code), 'online', order.id, order.customer);
+    const o = await api.sellItems(items.map(i => i.code), 'online', order.id, order.customer, items.filter(i => i.whole).map(i => i.whole));
     let zidLine;
     try { const r = await api.zid('post_comment', { order_ref: o.ref }); zidLine = `<p>Added to the Zid order: <span class="code">${esc((r.posted || []).join(' / '))}</span></p>`; }
     catch (err) { zidLine = `<p>Saved here, but not sent to Zid (${esc(errText(err))}). Use "Send to Zid" in Recent orders, or paste this into the order comment:</p><p class="code">${esc(o.trace_summary)}</p>`; }
@@ -876,9 +916,9 @@ $('kRecent').addEventListener('click', async e => {
 function renderRingUp(items) {
   const groups = new Map();
   for (const it of items) {
-    const key = it.kind === 'tray' ? it.product_id : 'c:' + it.code;
+    const key = it.product_id || 'c:' + it.code;
     if (!groups.has(key)) {
-      const p = it.kind === 'tray' ? state.productsById[it.product_id] : null;
+      const p = it.product_id ? state.productsById[it.product_id] : null;
       groups.set(key, { name: p?.name || it.label, ar: p?.name_ar || '', sku: p?.sku || p?.barcode || '', kgs: [] });
     }
     groups.get(key).kgs.push(Number(it.weight_kg));
@@ -897,7 +937,11 @@ function renderCounter() {
 onEnter($('kScan'), async v => {
   const items = state.counter.items;
   if (items.some(i => i.code === v || i.code === v.toUpperCase())) { msg($('kMsg'), `${v} is already scanned.`, 'warn'); return; }
-  try { const it = await lookupItem(v); items.push(it); msg($('kMsg'), `Added ${it.label}.`, 'ok'); $('kResult').innerHTML = ''; renderCounter(); }
+  try {
+    const it = await lookupItem(v);
+    if (it.kind === 'carcass' && !(await wholeSale(it, $('kMsg')))) return;
+    items.push(it); msg($('kMsg'), `Added ${it.label}.`, 'ok'); $('kResult').innerHTML = ''; renderCounter();
+  }
   catch (err) { msg($('kMsg'), errText(err), 'err'); }
 });
 $('kRows').addEventListener('click', e => { const b = e.target.closest('[data-rm-k]'); if (!b) return; state.counter.items.splice(+b.dataset.rmK, 1); renderCounter(); $('kScan').focus(); });
@@ -908,7 +952,7 @@ $('kConfirm').addEventListener('click', async () => {
   $('kConfirm').disabled = true;
   try {
     const ref = $('kReceipt').value.trim();
-    const o = await api.sellItems(items.map(i => i.code), 'counter', ref, null);
+    const o = await api.sellItems(items.map(i => i.code), 'counter', ref, null, items.filter(i => i.whole).map(i => i.whole));
     let zidLine = '';
     if (ref) {
       try { await api.zid('post_comment', { order_ref: o.ref }); zidLine = ' Added to the Zid order.'; }
@@ -1189,6 +1233,8 @@ function renderProductSettings() {
     <td><input data-f="min_weight_kg" type="number" step="0.001" min="0" value="${p.min_weight_kg ?? ''}" style="width:80px" aria-label="Minimum kg"></td>
     <td><input data-f="max_weight_kg" type="number" step="0.001" min="0" value="${p.max_weight_kg ?? ''}" style="width:80px" aria-label="Maximum kg"></td>
     <td><input data-f="shelf_life_days" type="number" min="0" max="365" value="${p.shelf_life_days}" style="width:70px" aria-label="Shelf life in days"></td>
+    <td><input data-f="b2b" type="checkbox" ${p.b2b ? 'checked' : ''} aria-label="B2B product"></td>
+    <td><input data-f="whole_carcass" type="checkbox" ${p.whole_carcass ? 'checked' : ''} aria-label="Sold as a whole carcass"></td>
     <td><input data-f="quick" type="checkbox" ${p.quick ? 'checked' : ''} aria-label="Show as button"></td>
     <td><input data-f="active" type="checkbox" ${p.active ? 'checked' : ''} aria-label="In use"></td></tr>`).join('');
 }
@@ -1319,3 +1365,50 @@ $('stTest').addEventListener('click', () => {
 });
 
 start().catch(err => { document.body.insertAdjacentHTML('afterbegin', `<div class="msg err">${esc(errText(err))}</div>`); });
+
+$('whNo').addEventListener('click', () => $('wholeBox').close('no'));
+
+/* ---------------- by-products sold in bulk ---------------- */
+const sourceText = list => (list || []).map(s => `${(WASTE[s.kind] || s.kind).toLowerCase()} from ${s.species || 'every animal'}`).join(', ');
+loaders.bulk = async () => {
+  try {
+    const [stock, sales] = await Promise.all([api.byproductStock(), api.recentBulkSales()]);
+    state.bulk = stock;
+    $('bEmpty').hidden = stock.length > 0;
+    $('bStock').innerHTML = stock.map(b => `<button type="button" class="byp" data-bp="${esc(b.product_id)}" aria-pressed="${$('bProduct').value === b.product_id}">
+      <span class="byp-name">${esc(b.name)}${b.name_ar ? ` <bdi class="ar" lang="ar" dir="rtl">${esc(b.name_ar)}</bdi>` : ''}</span>
+      <b>${kg(b.kg, 2)} kg</b><span class="hint">from ${b.carcasses} carcass${b.carcasses === 1 ? '' : 'es'} · takes ${esc(sourceText(b.sources))}</span></button>`).join('');
+    const cur = $('bProduct').value;
+    $('bProduct').innerHTML = '<option value="">Choose…</option>' + stock.map(b => `<option value="${esc(b.product_id)}" ${b.product_id === cur ? 'selected' : ''}>${esc(b.name)}${b.name_ar ? ' · ' + esc(b.name_ar) : ''} (${kg(b.kg, 2)} kg)</option>`).join('');
+    $('bRowsEmpty').hidden = sales.length > 0;
+    $('bRows').innerHTML = sales.map(s => `<tr><td>${when(s.sold_at)}</td><td>${esc(s.product_name)}${s.name_ar ? `<div class="ar" lang="ar" dir="rtl">${esc(s.name_ar)}</div>` : ''}</td><td class="num">${kg(s.weight_kg, 3)}</td><td>${esc(s.customer || '')}${s.order_ref ? `<div class="hint code">${esc(s.order_ref)}</div>` : ''}</td><td class="code">${esc(s.carcasses || '')}</td><td><button class="btn small danger admin-only" type="button" data-rm-bulk="${esc(s.id)}">Delete</button></td></tr>`).join('');
+  } catch (err) { msg($('bMsg'), errText(err), 'err'); }
+};
+$('bStock').addEventListener('click', e => {
+  const b = e.target.closest('[data-bp]'); if (!b) return;
+  $('bProduct').value = b.dataset.bp;
+  document.querySelectorAll('#bStock [data-bp]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  $('bWeight').focus();
+});
+$('bForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const b = (state.bulk || []).find(x => x.product_id === $('bProduct').value), w = num($('bWeight').value);
+  if (!b) { msg($('bMsg'), 'Choose the product.', 'err'); return; }
+  if (!(w > 0)) { msg($('bMsg'), 'Enter the weight.', 'err'); $('bWeight').focus(); return; }
+  if (w > num(b.kg) + 0.001) { msg($('bMsg'), `Only ${kg(b.kg, 3)} kg of ${b.name} is in stock. Record its wastage in the cutting room first.`, 'err'); return; }
+  if (!(await ask(`Sell ${short(w)} kg of ${b.name}?`, `<p>${esc($('bCustomer').value.trim() || 'No customer name')}${$('bRef').value.trim() ? ` · Zid order ${esc($('bRef').value.trim())}` : ''}. It is taken from the oldest wastage first.</p>`, 'Yes, record the sale'))) return;
+  $('bSell').disabled = true;
+  try {
+    await api.sellByproduct(b.product_id, w, $('bCustomer').value.trim(), $('bRef').value.trim());
+    msg($('bMsg'), `Sold ${short(w)} kg of ${b.name}.`, 'ok');
+    $('bWeight').value = ''; $('bCustomer').value = ''; $('bRef').value = '';
+    loaders.bulk();
+  } catch (err) { msg($('bMsg'), errText(err), 'err'); }
+  $('bSell').disabled = false;
+});
+$('bRows').addEventListener('click', async e => {
+  const b = e.target.closest('[data-rm-bulk]'); if (!b) return;
+  if (!(await ask('Delete this bulk sale?', '<p>Its kg go back into by-product stock.</p>', 'Yes, delete it'))) return;
+  try { await api.deleteBulkSale(b.dataset.rmBulk); msg($('bMsg'), 'Bulk sale deleted.', 'info'); loaders.bulk(); }
+  catch (err) { msg($('bMsg'), errText(err), 'err'); }
+});

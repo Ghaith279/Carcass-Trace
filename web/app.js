@@ -5,7 +5,13 @@ const mod = window.CT_TEST_API ? { api: window.CT_TEST_API, configured: true } :
 const { api, configured } = mod;
 const print = (items) => (window.CT_TEST_PRINT || printLabels)(items.map(it => {
   const d = { ...it.data };
-  if (it.kind === 'tray') d.product_name_ar = d.product_name_ar ?? state.productsById[d.product_id]?.name_ar;
+  if (it.kind === 'tray') {
+    // English on the first line and Arabic under it, never the same name twice
+    const p = state.productsById[d.product_id];
+    if (p) d.product_name = enOf(p);
+    d.product_name_ar = d.product_name_ar ?? arOf(p);
+    if (d.product_name_ar && d.product_name_ar.trim() === String(d.product_name).trim()) d.product_name_ar = null;
+  }
   else d.species_ar = d.species_ar ?? state.species.find(x => x.name === d.species)?.name_ar;
   return { ...it, data: d };
 }), state.settings);
@@ -139,8 +145,14 @@ async function loadProducts() {
   try { state.byp = new Set((await api.byproductSources()).map(r => r.product_id)); } catch (_) { state.byp = new Set(); }
 }
 // What the cutting room can make: not whole carcasses and not by-products from wastage
-const cuttable = p => p.active && !p.whole_carcass && !(state.byp && state.byp.has(p.id));
-const arName = p => p && p.name_ar ? `<bdi class="ar" lang="ar" dir="rtl">${esc(p.name_ar)}</bdi>` : '';
+const cuttable = p => p.active && !(state.byp && state.byp.has(p.id));
+// Zid sometimes has only the Arabic name: English comes from the products file (name_en),
+// and the Arabic name is shown only when it is different
+const hasAr = v => /[\u0600-\u06FF]/.test(v || '');
+const enOf = p => !p ? '' : p.name_en || p.name;
+const arOf = p => { if (!p) return ''; const ar = p.name_ar || (hasAr(p.name) ? p.name : ''); return ar && ar.trim() !== enOf(p).trim() ? ar : ''; };
+const arName = p => arOf(p) ? `<bdi class="ar" lang="ar" dir="rtl">${esc(arOf(p))}</bdi>` : '';
+const arDiv = p => arOf(p) ? `<div class="ar" lang="ar" dir="rtl">${esc(arOf(p))}</div>` : '';
 
 /* ---------------- tabs ---------------- */
 const loaders = {};
@@ -303,10 +315,10 @@ const weightText = p => p.fixed_weight_kg ? short(p.fixed_weight_kg) + ' kg'
 // Products grouped by animal: the given animals first and open, products for any animal next,
 // the other animals folded underneath (or left out when onlyOwn is set)
 function productGroups(q, own, sel, attr, otherNote, onlyOwn = false) {
-  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(p.name)}${arName(p)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`;
+  const btn = p => `<button type="button" data-${attr}="${esc(p.id)}" aria-pressed="${p.id === sel}">${esc(enOf(p))}${arName(p)}<span>${weightText(p)} · ${p.shelf_life_days} days</span></button>`;
   const byName = (a, b) => (b.quick ? 1 : 0) - (a.quick ? 1 : 0) || String(a.name).localeCompare(String(b.name));
   let all = state.products.filter(cuttable);
-  if (q) all = all.filter(p => [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
+  if (q) all = all.filter(p => [p.name, p.name_en, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
   const names = state.species.map(x => x.name);
   all.forEach(p => { if (p.species && !names.includes(p.species)) names.push(p.species); });
   const order = [...own, '', ...names.filter(n => !own.includes(n))];
@@ -317,8 +329,8 @@ function productGroups(q, own, sel, attr, otherNote, onlyOwn = false) {
     const label = g.n ? g.n : 'Any animal';
     const note = otherNote && own.length && g.n && !own.includes(g.n) ? ' <span class="hint">· other animal</span>' : '';
     // shop products first, then this animal's B2B products in their own section
-    const shop = g.items.filter(p => !p.b2b), b2b = g.items.filter(p => p.b2b);
-    return `<details class="pgroup" ${open ? 'open' : ''}><summary>${esc(label)} <span class="hint">${g.items.length}</span>${note}</summary>${shop.length ? `<div class="products">${shop.slice(0, 80).map(btn).join('')}</div>` : ''}${b2b.length ? `<div class="psub">B2B <span class="hint">${b2b.length}</span></div><div class="products">${b2b.slice(0, 80).map(btn).join('')}</div>` : ''}</details>`;
+    const whole = g.items.filter(p => p.whole_carcass), shop = g.items.filter(p => !p.b2b && !p.whole_carcass), b2b = g.items.filter(p => p.b2b && !p.whole_carcass);
+    return `<details class="pgroup" ${open ? 'open' : ''}><summary>${esc(label)} <span class="hint">${g.items.length}</span>${note}</summary>${whole.length ? `<div class="psub first">Whole carcass <span class="hint">one label, finishes the carcass</span></div><div class="products">${whole.map(btn).join('')}</div><div class="psub">Cuts</div>` : ''}${shop.length ? `<div class="products">${shop.slice(0, 80).map(btn).join('')}</div>` : ''}${b2b.length ? `<div class="psub">B2B <span class="hint">${b2b.length}</span></div><div class="products">${b2b.slice(0, 80).map(btn).join('')}</div>` : ''}</details>`;
   }).join('');
   return { html, empty: !groups.length };
 }
@@ -336,7 +348,7 @@ $('cProdSearch').addEventListener('keydown', e => {
   e.preventDefault();
   const q = $('cProdSearch').value.trim();
   const hit = state.products.find(p => cuttable(p) && (p.barcode === q || p.sku === q));
-  const match = state.products.filter(p => cuttable(p) && [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
+  const match = state.products.filter(p => cuttable(p) && [p.name, p.name_en, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q.toLowerCase())));
   const own = productsForCut().filter(p => match.includes(p));
   const list = state.cut.active.length || own.length ? own : match;
   const p = hit || (list.length === 1 ? list[0] : null);
@@ -348,9 +360,11 @@ $('cProducts').addEventListener('click', e => { const b = e.target.closest('[dat
 function selectProduct(p) {
   const sp = state.cut.active[0]?.species;
   if (p.species && sp && p.species !== sp) { msg($('cMsg'), `${p.name} is a ${p.species} product and cannot be made from a ${sp} carcass.`, 'err'); return; }
+  if (p.whole_carcass && state.cut.active.length > 1) { msg($('cMsg'), `${enOf(p)} is one whole carcass. Untick the batch box and scan just that carcass.`, 'err'); return; }
   state.cut.product = p;
   $('cWeight').value = p.fixed_weight_kg ? Number(p.fixed_weight_kg) : '';
   $('cCount').value = 1;
+  $('cCount').disabled = $('cMinus').disabled = $('cPlus').disabled = !!p.whole_carcass;
   renderProducts(); renderSelected();
   (p.fixed_weight_kg ? $('cCount') : $('cWeight')).focus();
   $(p.fixed_weight_kg ? 'cCount' : 'cWeight').select();
@@ -358,12 +372,18 @@ function selectProduct(p) {
 function renderSelected() {
   const p = state.cut.product;
   $('cPrintBtn').disabled = !p;
+  $('cCount').disabled = $('cMinus').disabled = $('cPlus').disabled = !!p?.whole_carcass;
   if (!p) { $('cSelTitle').textContent = 'Choose a product'; $('cSelInfo').textContent = 'Labels will show the product, weight, carcass number and consume-before date.'; return; }
-  $('cSelTitle').textContent = p.name + (p.name_ar ? ' · ' + p.name_ar : '');
+  $('cSelTitle').textContent = enOf(p) + (arOf(p) ? ' · ' + arOf(p) : '');
+  if (p.whole_carcass) {
+    $('cSelInfo').textContent = `Whole carcass, ${weightText(p)}. Record the wastage below first, then weigh all the pieces together. One label is printed and the carcass is finished.`;
+    $('cPrintBtn').textContent = 'Print label and finish carcass';
+    return;
+  }
   $('cSelInfo').textContent = `${p.fixed_weight_kg ? 'Fixed weight' : p.min_weight_kg ? `Weigh it: ${weightText(p)}` : 'Weigh each unit'} · consume before ${showYmd(addDays(p.shelf_life_days))} (${p.shelf_life_days} days)`;
   updatePrintLabel();
 }
-function updatePrintLabel() { const n = Math.max(1, parseInt($('cCount').value, 10) || 1); $('cPrintBtn').textContent = `Print ${n} label${n === 1 ? '' : 's'}`; }
+function updatePrintLabel() { if (state.cut.product?.whole_carcass) return; const n = Math.max(1, parseInt($('cCount').value, 10) || 1); $('cPrintBtn').textContent = `Print ${n} label${n === 1 ? '' : 's'}`; }
 $('cCount').addEventListener('input', updatePrintLabel);
 $('cMinus').addEventListener('click', () => { $('cCount').value = Math.max(1, (parseInt($('cCount').value, 10) || 1) - 1); updatePrintLabel(); });
 $('cPlus').addEventListener('click', () => { $('cCount').value = Math.min(200, (parseInt($('cCount').value, 10) || 0) + 1); updatePrintLabel(); });
@@ -379,7 +399,8 @@ $('cPrintForm').addEventListener('submit', async e => {
   if (product.species && active.some(c => c.species !== product.species)) { msg($('cMsg'), `${product.name} is a ${product.species} product. Choose a product for this animal.`, 'err'); return; }
   const min = num(product.min_weight_kg), max = num(product.max_weight_kg);
   if (min > 0 && weight < min) { msg($('cMsg'), `${product.name} must weigh at least ${short(min)} kg. This one is ${short(weight)} kg.`, 'err'); $('cWeight').focus(); $('cWeight').select(); return; }
-  if (max > 0 && weight > max && !(await ask(`${short(weight)} kg is over the usual weight`, `<p>${esc(product.name)} is normally ${esc(weightText(product))}. Print it at ${esc(short(weight))} kg anyway?</p>`, 'Yes, print it'))) { $('cWeight').focus(); return; }
+  if (max > 0 && weight > max && !product.whole_carcass && !(await ask(`${short(weight)} kg is over the usual weight`, `<p>${esc(product.name)} is normally ${esc(weightText(product))}. Print it at ${esc(short(weight))} kg anyway?</p>`, 'Yes, print it'))) { $('cWeight').focus(); return; }
+  if (product.whole_carcass) { await printWhole(active[0], product, weight); return; }
   $('cPrintBtn').disabled = true;
   try {
     const trays = await api.createTrays(product.id, active.map(c => c.id), count,
@@ -393,6 +414,24 @@ $('cPrintForm').addEventListener('submit', async e => {
   $('cPrintBtn').disabled = !state.cut.product;
 });
 
+// A whole carcass cut into pieces: one label for all of it, then the carcass is finished
+async function printWhole(c, product, weight) {
+  let waste = 0;
+  try { waste = num((await api.carcassYieldOne(c.id))?.waste_kg); } catch (_) {}
+  const shrink = num(c.weight_kg) - weight - waste;
+  if (shrink < -0.001) { msg($('cMsg'), `${short(weight)} kg plus ${short(waste)} kg wastage is more than ${c.no} weighed (${kg(c.weight_kg, 2)} kg). Check the weights.`, 'err'); return; }
+  if (!(await ask(`Print ${enOf(product)} and finish ${c.no}?`, `<dl class="kv"><dt>Received</dt><dd>${kg(c.weight_kg, 2)} kg</dd><dt>On the label</dt><dd>${kg(weight, 3)} kg</dd><dt>Wastage recorded</dt><dd>${kg(waste, 2)} kg</dd><dt>Shrinkage</dt><dd>${kg(shrink, 2)} kg (${num(c.weight_kg) > 0 ? (shrink / num(c.weight_kg) * 100).toFixed(1) : '0'}%)</dd></dl>${num(product.max_weight_kg) > 0 && weight > num(product.max_weight_kg) ? `<p><strong>${short(weight)} kg is over the usual ${esc(weightText(product))}.</strong></p>` : ''}<p class="hint">If wastage is missing, press Cancel and record it first. The carcass cannot be cut after this.</p>`, 'Yes, print and finish'))) return;
+  $('cPrintBtn').disabled = true;
+  try {
+    const trays = await api.makeWholeUnit(c.id, product.id, weight, butcherId());
+    print(trays.map(t => ({ kind: 'tray', data: { ...t, carcasses: [c] } })));
+    msg($('cMsg'), `Printed ${enOf(product)} (${kg(weight, 3)} kg) and finished ${c.no}. Scan the next carcass.`, 'ok');
+    state.cut.product = null; state.cut.active = []; $('cCount').disabled = $('cMinus').disabled = $('cPlus').disabled = false;
+    loaders.cut(); renderSelected(); $('cScan').focus();
+  } catch (err) { msg($('cMsg'), 'Could not print: ' + errText(err), 'err'); }
+  $('cPrintBtn').disabled = !state.cut.product;
+}
+
 async function renderCutTrays() {
   const a = state.cut.active;
   if (!a.length) { $('cRows').innerHTML = ''; $('cRowsEmpty').hidden = false; $('cRowsEmpty').textContent = 'Select a carcass to see its units.'; $('cYield').textContent = ''; return; }
@@ -400,7 +439,7 @@ async function renderCutTrays() {
     let trays = await api.traysForCarcass(a[0].id);
     if (a.length > 1) { const key = a.map(c => c.no).sort().join(','); trays = trays.filter(t => carcassNos(t).sort().join(',') === key); }
     $('cRowsEmpty').hidden = trays.length > 0; $('cRowsEmpty').textContent = 'No units yet.';
-    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}${state.productsById[t.product_id]?.name_ar ? `<div class="ar" lang="ar" dir="rtl">${esc(state.productsById[t.product_id].name_ar)}</div>` : ''}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger admin-only" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
+    $('cRows').innerHTML = trays.slice(0, 200).map(t => `<tr><td class="code">${esc(t.code)}</td><td>${esc(enOf(state.productsById[t.product_id]) || t.product_name)}${carcassNos(t).length > 1 ? ' <span class="chip">batch</span>' : ''}${arDiv(state.productsById[t.product_id])}</td><td class="num">${kg(t.weight_kg, 3)}</td><td>${showYmd(t.use_by)}</td><td>${chip(t.status)}</td><td>${t.status === 'in_stock' ? `<button class="btn small" type="button" data-reprint-tray="${esc(t.code)}">Reprint</button> <button class="btn small danger admin-only" type="button" data-void="${esc(t.code)}">Delete</button>` : ''}</td></tr>`).join('');
     if (a.length === 1) {
       const packed = trays.reduce((s, t) => s + num(t.weight_kg) / Math.max(1, (t.carcasses || []).length), 0);
       $('cYield').textContent = `${trays.length} units · ${kg(packed)} kg packed from ${kg(a[0].weight_kg, 1)} kg received · ${Math.round(packed / num(a[0].weight_kg) * 100)}% yield so far`;
@@ -661,7 +700,7 @@ async function lookupItem(raw) {
     if (t.status === 'written_off') throw new Error(`Unit ${code} was taken out of stock (${t.write_off_reason}).`);
     if (t.status === 'returned') throw new Error(`Unit ${code} came back from a customer (${t.write_off_reason}).`);
     if (t.status === 'reproduced') throw new Error(`Unit ${code} was reproduced (${t.write_off_reason}). Scan the new unit instead.`);
-    return { kind: 'tray', code: t.code, product_id: t.product_id, label: t.product_name, carcasses: carcassNos(t), species: [...new Set((t.carcasses || []).map(c => c.species))], weight_kg: t.weight_kg, use_by: t.use_by };
+    return { kind: 'tray', code: t.code, product_id: t.product_id, label: enOf(state.productsById[t.product_id]) || t.product_name, carcasses: carcassNos(t), species: [...new Set((t.carcasses || []).map(c => c.species))], weight_kg: t.weight_kg, use_by: t.use_by };
   }
   const c = await api.carcassByNo(code.toUpperCase());
   if (c) {
@@ -681,7 +720,7 @@ function wholeSale(it, msgEl) {
   $('whInfo').textContent = `${it.species.join(', ')} · received at ${kg(it.weight_kg, 2)} kg. Weigh it now and enter the weight.`;
   const draw = () => {
     $('whProducts').hidden = !list.length;
-    $('whProducts').innerHTML = list.map(p => `<button type="button" data-wh="${esc(p.id)}" aria-pressed="${p.id === pick?.id}">${esc(p.name)}${arName(p)}<span>${weightText(p)}</span></button>`).join('');
+    $('whProducts').innerHTML = list.map(p => `<button type="button" data-wh="${esc(p.id)}" aria-pressed="${p.id === pick?.id}">${esc(enOf(p))}${arName(p)}<span>${weightText(p)}</span></button>`).join('');
   };
   draw(); $('whWeight').value = ''; $('whMsg').innerHTML = '';
   $('whProducts').onclick = e => { const b = e.target.closest('[data-wh]'); if (!b) return; pick = state.productsById[b.dataset.wh]; warned = false; draw(); $('whWeight').focus(); };
@@ -702,7 +741,7 @@ function wholeSale(it, msgEl) {
   });
 }
 const warnLine = it => it.warn ? `<div class="hint" style="color:var(--warn)">${esc(it.warn)}</div>` : '';
-const itemAr = it => { const p = state.productsById[it.product_id]; return p?.name_ar ? `<div class="ar" lang="ar" dir="rtl">${esc(p.name_ar)}</div>` : ''; };
+const itemAr = it => arDiv(state.productsById[it.product_id]);
 const itemRows = (items, attr) => items.map((it, i) => `<tr>${attr === 'p'
   ? `<td class="code">${esc(it.code)}</td><td>${esc(it.label)}${itemAr(it)}${warnLine(it)}</td>`
   : `<td>${esc(it.label)}${itemAr(it)}<div class="hint code">${esc(it.code)}</div>${warnLine(it)}</td>`}<td class="code">${it.carcasses.map(esc).join('<br>')}</td><td class="num">${kg(it.weight_kg, 3)}</td><td><button class="btn small" type="button" data-rm-${attr}="${i}" aria-label="Remove">×</button></td></tr>`).join('');
@@ -919,7 +958,7 @@ function renderRingUp(items) {
     const key = it.product_id || 'c:' + it.code;
     if (!groups.has(key)) {
       const p = it.product_id ? state.productsById[it.product_id] : null;
-      groups.set(key, { name: p?.name || it.label, ar: p?.name_ar || '', sku: p?.sku || p?.barcode || '', kgs: [] });
+      groups.set(key, { name: enOf(p) || it.label, ar: arOf(p), sku: p?.sku || p?.barcode || '', kgs: [] });
     }
     groups.get(key).kgs.push(Number(it.weight_kg));
   }
@@ -1223,7 +1262,7 @@ loaders.settings = async () => {
 };
 function renderProductSettings() {
   const q = $('prSearch').value.trim().toLowerCase();
-  const list = state.products.filter(p => !q || [p.name, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
+  const list = state.products.filter(p => !q || [p.name, p.name_en, p.name_ar, p.sku, p.barcode].some(v => v && String(v).toLowerCase().includes(q)));
   $('prEmpty').hidden = list.length > 0;
   $('prRows').innerHTML = list.map(p => `<tr data-pid="${esc(p.id)}">
     <td>${esc(p.name)}${p.zid_product_id ? ' <span class="chip">Zid</span>' : ''}</td>

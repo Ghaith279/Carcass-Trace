@@ -1,0 +1,3 @@
+# Browsers check for a new version of every file on each visit, so an update shows straight away.
+/*
+  Cache-Control: no-cache

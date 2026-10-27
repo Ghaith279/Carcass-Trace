@@ -119,6 +119,8 @@ export const api = {
 
   // --- live dashboard ---
   async dashboard() { return check(await sb.rpc('dashboard')); },
+  async dashboardLive() { return check(await sb.rpc('dashboard_live')); },
+  async yieldAnalytics(days) { return check(await sb.rpc('yield_analytics', { p_days: days })); },
   async exportData(from, to) { return check(await sb.rpc('export_data', { p_from: from, p_to: to })); },
 
   // --- sales ---

@@ -227,6 +227,8 @@ async function pickCarcass(raw) {
     const c = await api.carcassByNo(no);
     if (!c) { msg($('cMsg'), `No carcass ${no}. Check the label.`, 'err'); return; }
     if (c.status === 'sold_whole') { msg($('cMsg'), `Carcass ${no} was sold whole and cannot be cut.`, 'err'); return; }
+    if (c.chiller_use_by && c.chiller_use_by < ymdLocal()) { msg($('cMsg'), `Carcass ${no} expired in the chiller on ${showYmd(c.chiller_use_by)}. It cannot be cut.`, 'err'); return; }
+    if (!state.cut.active.some(a => a.id === c.id) && !(await expiryOk(no, c.chiller_use_by, 'Cut'))) { msg($('cMsg'), `${no} was not put on the block.`, 'info'); return; }
     const cut = state.cut;
     if ($('cBatch').checked) {
       if (cut.active.length && cut.active[0].species !== c.species) { msg($('cMsg'), `${no} is ${c.species}. A batch can only mix carcasses of the same animal (${cut.active[0].species}).`, 'err'); return; }
@@ -536,6 +538,7 @@ onEnter($('xScan'), async v => {
   try {
     const it = await lookupItem(v);
     if (it.kind !== 'tray') { msg($('xMsg'), 'Scan unit labels here, not carcass labels.', 'err'); return; }
+    if (!(await expiryOk(it.code, it.use_by, 'Reproduce'))) { msg($('xMsg'), `${it.code} was not added.`, 'info'); return; }
     const sp = reproAnimal();
     if (it.species.length !== 1 || (sp && it.species[0] !== sp)) { msg($('xMsg'), `${it.code} is ${it.species.join(' and ').toLowerCase() || 'from no carcass'}. Only units from one animal${sp ? ` (${sp.toLowerCase()})` : ''} can be reproduced together.`, 'err'); return; }
     items.push(it); msg($('xMsg'), `Added ${it.label}.`, 'ok'); $('xResult').innerHTML = ''; renderRepro();
@@ -585,6 +588,100 @@ $('xPrintForm').addEventListener('submit', async e => {
 });
 
 /* ---------------- dashboard ---------------- */
+// --- dashboard charts: plain HTML and SVG, no libraries ---
+const tipEl = (() => { const t = document.createElement('div'); t.className = 'tip'; t.hidden = true; document.body.appendChild(t); return t; })();
+document.addEventListener('pointermove', e => {
+  const h = e.target.closest?.('[data-tip]');
+  if (!h) { tipEl.hidden = true; return; }
+  tipEl.innerHTML = h.dataset.tip; tipEl.hidden = false;
+  const w = tipEl.offsetWidth, x = Math.min(e.clientX + 14, innerWidth - w - 8);
+  tipEl.style.left = Math.max(8, x) + 'px'; tipEl.style.top = (e.clientY + 16) + 'px';
+});
+document.addEventListener('scroll', () => { tipEl.hidden = true; }, true);
+const attr = v => esc(v).replace(/"/g, '&quot;');
+// horizontal bars: [{label, value, text, note, tip}]
+function hbars(rows, max, empty) {
+  if (!rows.length) return `<p class="empty">${esc(empty)}</p>`;
+  const m = max || Math.max(...rows.map(r => num(r.value)), 0) || 1;
+  return rows.map(r => `<div class="hbar" data-tip="${attr(r.tip || '')}"><span class="hl-label">${esc(r.label)}</span>` +
+    `<span class="track"><i style="width:${Math.max(0, Math.min(100, num(r.value) / m * 100)).toFixed(1)}%"></i></span>` +
+    `<b>${r.text}</b>${r.note ? `<small>${r.note}</small>` : ''}</div>`).join('');
+}
+const life = v => v == null ? null : num(v) * 100;
+const lifeCls = p => p == null ? '' : p > 60 ? 'good' : p >= 30 ? 'warn' : 'bad';
+const lifeWord = p => p == null ? 'Nothing here' : p > 60 ? 'Fresh' : p >= 30 ? 'Use soon' : 'Old: sell or use first';
+function gauge(title, v, rows) {
+  const p = life(v), c = lifeCls(p), len = p == null ? 0 : Math.max(0.5, p);
+  return `<div class="gauge ${c}"><h3>${esc(title)}</h3>
+    <svg viewBox="0 0 200 116" role="img" aria-label="${attr(title)}: ${p == null ? 'nothing' : Math.round(p) + '% of life left'}">
+      <path class="g-track" d="M20 100 A80 80 0 0 1 180 100" pathLength="100"/>
+      ${p == null ? '' : `<path class="g-fill" d="M20 100 A80 80 0 0 1 180 100" pathLength="100" stroke-dasharray="${len.toFixed(1)} 100"/>`}
+      <text x="100" y="92" text-anchor="middle" class="g-num">${p == null ? '–' : Math.round(p) + '%'}</text>
+    </svg>
+    <p class="g-word">${p == null ? '' : `<span class="dot"></span>`}${esc(lifeWord(p))}</p>
+    <div class="g-rows">${rows.map(r => { const q = life(r.v); return `<div data-tip="${attr(`<b>${esc(r.name)}</b><br>${q == null ? 'nothing' : Math.round(q) + '% of life left'} · ${n1(r.kg)} kg`)}"><span>${esc(r.name)}</span><span class="track"><i class="${lifeCls(q)}" style="width:${q == null ? 0 : q.toFixed(1)}%"></i></span><b>${q == null ? '–' : Math.round(q) + '%'}</b></div>`; }).join('')}</div>
+  </div>`;
+}
+// bar with rounded top corners, anchored to the baseline
+const barPath = (x, y, w, h, r) => { if (h <= 0) return ''; r = Math.min(r, w / 2, h); return `M${x} ${y + h}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + w - r}Q${x + w} ${y} ${x + w} ${y + r}V${y + h}Z`; };
+function weekChart(week, animal) {
+  const pick = (a, k) => Object.entries(a).filter(([n]) => !animal || n === animal).reduce((s, [, v]) => s + num(v[k]), 0);
+  const days = week.map(w => ({ date: w.date, rec: pick(w.animals || {}, 'received'), sold: pick(w.animals || {}, 'sold') }));
+  const W = 1000, H = 260, L = 44, B = 28, T = 10, R = 8, ph = H - B - T;
+  const top = Math.max(...days.map(d => Math.max(d.rec, d.sold)), 0);
+  const step = top <= 10 ? 2 : top <= 50 ? 10 : top <= 100 ? 20 : top <= 250 ? 50 : top <= 500 ? 100 : 250;
+  const max = Math.max(step, Math.ceil(top / step) * step), y = v => T + ph - v / max * ph;
+  const gw = (W - L - R) / days.length, bw = Math.min(26, gw * 0.3);
+  let g = '';
+  for (let v = 0; v <= max + 0.001; v += step) g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${n0(v)}</text>`;
+  days.forEach((d, i) => {
+    const cx = L + gw * i + gw / 2, day = new Date(d.date + 'T12:00:00');
+    const lab = i === days.length - 1 ? 'Today' : day.toLocaleDateString([], { weekday: 'short', day: 'numeric' });
+    g += `<path class="b1" d="${barPath(cx - bw - 1, y(d.rec), bw, y(0) - y(d.rec), 4)}"/><path class="b2" d="${barPath(cx + 1, y(d.sold), bw, y(0) - y(d.sold), 4)}"/>`;
+    g += `<text class="ax" x="${cx}" y="${H - 8}" text-anchor="middle">${esc(lab)}</text>`;
+    g += `<rect class="hit" x="${cx - gw / 2}" y="${T}" width="${gw}" height="${ph}" data-tip="${attr(`<b>${esc(lab)}</b><br>Received ${n1(d.rec)} kg<br>Sold ${n1(d.sold)} kg`)}"/>`;
+  });
+  g += `<line class="base" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Received and sold kg, last 7 days">${g}</svg>`;
+}
+let weekAnimal = '', lastLive = null;
+function renderLive(L) {
+  lastLive = L;
+  const A = L.animals || [], tot = f => A.reduce((s, a) => s + num(a[f]), 0);
+  const card = (title, big, sub, rows, max, tip) => `<div class="kpi"><h3>${title}</h3><b>${big}</b><span class="hint">${sub}</span>` +
+    `<div class="mini">${rows.map(r => `<div data-tip="${attr(r.tip)}"><span>${esc(r.name)}</span><span class="track"><i style="width:${max ? Math.min(100, r.v / max * 100).toFixed(1) : 0}%"></i></span><em>${r.text}</em></div>`).join('')}</div></div>`;
+  const rec = A.map(a => ({ name: a.species, v: num(a.received_kg), text: `${n0(a.received_head)} · ${n1(a.received_kg)} kg`, tip: `<b>${esc(a.species)}</b><br>${n0(a.received_head)} head received today<br>${n1(a.received_kg)} kg` }));
+  const sold = A.map(a => ({ name: a.species, v: num(a.sold_kg), text: `${n1(a.sold_kg)} kg`, tip: `<b>${esc(a.species)}</b><br>Units ${n1(a.sold_units_kg)} kg<br>Whole carcasses ${n1(a.sold_whole_kg)} kg<br>By-products ${n1(a.sold_bulk_kg)} kg` }));
+  const waste = A.map(a => ({ name: a.species, v: num(a.waste_kg), text: `${n1(a.waste_kg)} kg`, tip: `<b>${esc(a.species)}</b><br>${n1(a.waste_kg)} kg wastage recorded today` }));
+  const maxOf = rows => Math.max(...rows.map(r => r.v), 0);
+  $('dKpis').innerHTML = [
+    card('Received today', `${n0(tot('received_head'))} head`, `${n1(tot('received_kg'))} kg`, rec, maxOf(rec)),
+    card('Sold today', `${n1(tot('sold_kg'))} kg`, `units ${n1(tot('sold_units_kg'))} · whole ${n1(tot('sold_whole_kg'))} · by-products ${n1(tot('sold_bulk_kg'))}`, sold, maxOf(sold)),
+    card('Wastage today', `${n1(tot('waste_kg'))} kg`, 'recorded in the cutting room', waste, maxOf(waste))
+  ].join('');
+  const chill = A.filter(a => num(a.chiller_head) || num(a.chiller_kg));
+  $('dChillChart').innerHTML = hbars(chill.map(a => ({ label: a.species, value: a.chiller_kg, text: `${n1(a.chiller_kg)} kg`, note: `${n0(a.chiller_head)} head`, tip: `<b>${esc(a.species)}</b><br>${n0(a.chiller_head)} carcass(es)<br>${n1(a.chiller_kg)} kg still to cut` })), 0, 'The chiller is empty.');
+  const pack = A.filter(a => num(a.packed_stock_kg));
+  $('dPackChart').innerHTML = hbars(pack.map(a => ({ label: a.species, value: a.packed_stock_kg, text: `${n1(a.packed_stock_kg)} kg`, tip: `<b>${esc(a.species)}</b><br>${n1(a.packed_stock_kg)} kg packed in stock` })), 0, 'No packed stock.');
+  $('dGauges').innerHTML = gauge('Chiller carcasses', L.chiller_life, chill.map(a => ({ name: a.species, v: a.chiller_life, kg: a.chiller_kg }))) +
+    gauge('Packed stock', L.packed_life, pack.map(a => ({ name: a.species, v: a.packed_life, kg: a.packed_stock_kg })));
+  const names = A.map(a => a.species);
+  if (weekAnimal && !names.includes(weekAnimal)) weekAnimal = '';
+  $('dWeekFilter').innerHTML = ['', ...names].map(n => `<button type="button" data-animal="${attr(n)}" aria-pressed="${n === weekAnimal}">${esc(n || 'All')}</button>`).join('');
+  $('dWeek').innerHTML = weekChart(L.week || [], weekAnimal);
+  const wt = L.waste_types || [];
+  $('dWasteChart').innerHTML = hbars(wt.map(w => ({ label: WASTE[w.kind] || w.kind, value: w.kg, text: `${kg(w.kg, 1)} kg`, tip: `<b>${esc(WASTE[w.kind] || w.kind)}</b><br>${kg(w.kg, 2)} kg today` })), 0, 'No wastage recorded today.');
+  const ex = L.expiring || [];
+  $('dExpHint').textContent = `Expired, or expiring within ${num(L.warn_days)} day(s). Expired items can't be cut or sold: write them off.`;
+  $('dExpEmpty').hidden = ex.length > 0;
+  $('dExp').innerHTML = ex.map(e => `<tr class="click" data-trace="${esc(e.code)}"><td class="code">${esc(e.code)}</td><td>${esc(e.kind === 'carcass' ? e.name + ' carcass' : e.name)}</td><td class="num">${kg(e.kg, 1)}</td><td>${useByChip(e.use_by)}</td></tr>`).join('');
+}
+$('dWeekFilter').addEventListener('click', e => {
+  const b = e.target.closest('button[data-animal]'); if (!b || !lastLive) return;
+  weekAnimal = b.dataset.animal;
+  $('dWeekFilter').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  $('dWeek').innerHTML = weekChart(lastLive.week || [], weekAnimal);
+});
 let dashBusy = false;
 const n0 = v => Math.round(num(v)).toLocaleString();
 const n1 = v => num(v).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
@@ -592,42 +689,16 @@ const units = v => { const x = num(v); return Math.abs(x - Math.round(x)) < 0.05
 loaders.dash = async () => {
   if (dashBusy) return; dashBusy = true;
   try {
-    const d = await api.dashboard();
+    const [d, L] = await Promise.all([api.dashboard(), api.dashboardLive()]);
     const sp = d.species, sum = (rows, f) => rows.reduce((s, r) => s + num(r[f]), 0);
-    const tile = (big, label, cls = '') => `<div class="tile ${cls}"><b>${big}</b><span>${label}</span></div>`;
-    const expired = sum(sp, 'chiller_expired'), soon = sum(sp, 'chiller_soon');
-    const stockSoon = sum(d.stock, 'expiring_soon'), stockExp = sum(d.stock, 'expired');
-    $('dTiles').innerHTML = [
-      tile(`${n1(sum(sp, 'kg_sold') + sum(sp, 'whole_kg'))} kg`, `sold today · ${n1(sum(sp, 'kg_online'))} kg online · ${n1(sum(sp, 'kg_counter'))} kg counter · ${n1(sum(sp, 'whole_kg'))} kg whole`, 'hl'),
-      tile(`${n0(sum(sp, 'whole_head'))} head`, `whole carcasses sold today · ${n1(sum(sp, 'whole_kg'))} kg`, 'hl'),
-      tile(`${n0(sum(sp, 'chiller_head'))} head`, `in the chiller · ${n1(sum(sp, 'chiller_kg'))} kg`),
-      tile(`${n0(sum(sp, 'received_head'))} head`, `received today · ${n1(sum(sp, 'received_kg'))} kg`),
-      tile(`${n1(sum(sp, 'kg_made'))} kg`, `produced today · ${units(sum(sp, 'units_made'))} units`),
-      tile(`${n1(sum(sp, 'stock_kg'))} kg`, `in stock · ${units(sum(sp, 'stock_units'))} units`),
-      tile(`${n1(sum(sp, 'waste_kg'))} kg`, 'wastage today'),
-      tile(expired + soon, `carcasses near or past chiller date${expired ? ` (${expired} past)` : ''}`, expired ? 'bad' : (soon ? 'warn' : '')),
-      tile(stockSoon + stockExp, `units near or past consume-before${stockExp ? ` (${stockExp} past)` : ''}`, stockExp ? 'bad' : (stockSoon ? 'warn' : '')),
-      tile(num(d.complaints_30d), `returns and complaints, last 30 days${num(d.complaints_today) ? ` · ${d.complaints_today} today` : ''}`, num(d.complaints_today) ? 'warn' : '')
-    ].join('');
+    renderLive(L);
+    $('dNote').textContent = `Returns and complaints: ${num(d.complaints_30d)} in the last 30 days${num(d.complaints_today) ? `, ${d.complaints_today} today` : ''}.`;
     const row = r => `<td class="num">${n0(r.chiller_head)}</td><td class="num">${n1(r.chiller_kg)}</td><td class="num">${n0(r.received_head)}</td><td class="num">${n1(r.received_kg)}</td><td class="num hl">${n0(r.whole_head)}</td><td class="num hl">${n1(r.whole_kg)}</td><td class="num hl">${units(r.units_sold)}</td><td class="num hl">${n1(r.kg_sold)}</td><td class="num hl">${n1(r.kg_online)}</td><td class="num hl">${n1(r.kg_counter)}</td><td class="num">${units(r.units_made)}</td><td class="num">${n1(r.kg_made)}</td><td class="num">${units(r.stock_units)}</td><td class="num">${n1(r.stock_kg)}</td><td class="num">${n1(r.waste_kg)}</td>`;
     const shown = sp.filter(r => ['chiller_head', 'received_head', 'whole_head', 'units_made', 'units_sold', 'stock_units', 'waste_kg'].some(f => num(r[f])) || state.species.find(x => x.name === r.species)?.active);
     $('dSpecies').innerHTML = shown.map(r => `<tr><td><b>${esc(r.species)}</b></td>${row(r)}</tr>`).join('');
     const tot = {}; ['chiller_head', 'chiller_kg', 'received_head', 'received_kg', 'whole_head', 'whole_kg', 'units_sold', 'kg_sold', 'kg_online', 'kg_counter', 'units_made', 'kg_made', 'stock_units', 'stock_kg', 'waste_kg'].forEach(f => { tot[f] = sum(sp, f); });
     $('dSpeciesTotal').innerHTML = `<tr><td><b>Total</b></td>${row(tot)}</tr>`;
-    // carcasses on hand: whole ones still hanging, and what is left on the ones being cut
     const left = c => c.status === 'cutting' ? Math.max(0, num(c.weight_kg) - num(c.packed_kg) - num(c.waste_kg)) : num(c.weight_kg);
-    const hand = {};
-    sp.forEach(r => { hand[r.species] = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: num(r.stock_kg) }; });
-    d.chiller.forEach(c => {
-      const h = hand[c.species] || (hand[c.species] = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: 0 });
-      if (c.status === 'cutting') { h.cut++; h.cutKg += left(c); } else { h.whole++; h.wholeKg += num(c.weight_kg); }
-    });
-    const handRow = (name, h) => `<tr><td><b>${esc(name)}</b></td><td class="num hl">${n0(h.whole)}</td><td class="num hl">${n1(h.wholeKg)}</td><td class="num">${n0(h.cut)}</td><td class="num">${n1(h.cutKg)}</td><td class="num">${n0(h.whole + h.cut)}</td><td class="num">${n1(h.wholeKg + h.cutKg)}</td><td class="num">${n1(h.stockKg)}</td></tr>`;
-    const handShown = Object.entries(hand).filter(([n, h]) => h.whole || h.cut || h.stockKg || state.species.find(x => x.name === n)?.active);
-    $('dOnHand').innerHTML = handShown.map(([n, h]) => handRow(n, h)).join('');
-    const ht = { whole: 0, wholeKg: 0, cut: 0, cutKg: 0, stockKg: 0 };
-    Object.values(hand).forEach(h => Object.keys(ht).forEach(k => { ht[k] += h[k]; }));
-    $('dOnHandTotal').innerHTML = handRow('Total', ht);
     const hrs = h => num(h) < 24 ? `${Math.round(num(h))} h` : `${(num(h) / 24).toFixed(1)} days`;
     $('dChillerEmpty').hidden = d.chiller.length > 0;
     $('dChiller').innerHTML = d.chiller.map(c => `<tr class="click" data-trace="${esc(c.no)}"><td class="code">${esc(c.no)}</td><td>${esc(c.species)}</td><td>${esc(c.farm || '')}</td><td class="num">${kg(c.weight_kg, 1)}</td><td class="num">${hrs(c.hours)}</td><td>${c.chiller_use_by ? useByChip(c.chiller_use_by) : ''}</td><td class="num">${kg(c.packed_kg, 1)}</td><td class="num"><b>${kg(left(c), 1)}</b></td><td class="num">${kg(c.waste_kg, 1)}</td><td>${chip(c.status)}</td></tr>`).join('');
@@ -637,11 +708,6 @@ loaders.dash = async () => {
     $('dProduced').innerHTML = d.produced_today.map(r => `<tr><td>${esc(r.product_name)}</td><td class="num">${r.trays}</td><td class="num">${kg(r.kg, 1)}</td></tr>`).join('');
     $('dStockEmpty').hidden = d.stock.length > 0;
     $('dStock').innerHTML = d.stock.map(r => `<tr><td>${esc(r.product_name)}</td><td class="num">${r.trays}</td><td class="num">${kg(r.kg, 1)}</td><td>${useByChip(r.oldest_use_by)}</td><td class="num">${r.days_left < 0 ? `<span class="chip bad">${r.days_left}</span>` : r.days_left}</td><td class="num">${r.expiring_soon ? `<span class="chip warn">${r.expiring_soon}</span>` : 0}</td><td class="num">${r.expired ? `<span class="chip bad">${r.expired}</span>` : 0}</td></tr>`).join('');
-    const y30 = sp.filter(r => num(r.n30));
-    $('dYieldEmpty').hidden = y30.length > 0;
-    $('dYield').innerHTML = y30.map(r => `<tr><td>${esc(r.species)}</td><td class="num">${r.n30}</td><td class="num">${kg(r.avgkg30, 1)}</td><td class="num">${pct(r.yield30)}</td><td class="num">${pct(r.waste30)}</td><td class="num">${pct(r.shrink30)}</td></tr>`).join('');
-    $('dWasteEmpty').hidden = d.waste_today.length > 0;
-    $('dWaste').innerHTML = d.waste_today.map(r => `<tr><td>${esc(WASTE[r.kind] || r.kind)}</td><td class="num">${kg(r.kg, 2)}</td></tr>`).join('');
     $('dUpdated').textContent = `Live · updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · refreshes every 30 seconds`;
     if (!$('xlFrom').value) { const t = new Date(); $('xlFrom').value = ymdLocal(new Date(t.getFullYear(), t.getMonth(), 1)); $('xlTo').value = ymdLocal(t); }
     msg($('dMsg'), '');
@@ -693,6 +759,13 @@ $('xlForm').addEventListener('submit', async e => {
 });
 
 /* ---------------- scanning units out (shared by packing and counter) ---------------- */
+// Near expiry: ask before it is cut, sold or reproduced. Returns false when the person cancels.
+async function expiryOk(code, ymd, action) {
+  if (!ymd || ymd > addDays(state.settings?.expiry_warning_days ?? 1)) return true;
+  const left = Math.round((Date.parse(ymd) - Date.parse(ymdLocal())) / 864e5);
+  const when = left <= 0 ? 'today' : left === 1 ? 'tomorrow' : `in ${left} days`;
+  return ask(`${code} expires ${when}`, `<p>Consume before ${esc(showYmd(ymd))}. ${esc(action)} it anyway?</p>`, `Yes, ${action.toLowerCase()} it`);
+}
 async function lookupItem(raw) {
   const code = raw.trim();
   const t = await api.trayByCode(code);
@@ -701,12 +774,14 @@ async function lookupItem(raw) {
     if (t.status === 'written_off') throw new Error(`Unit ${code} was taken out of stock (${t.write_off_reason}).`);
     if (t.status === 'returned') throw new Error(`Unit ${code} came back from a customer (${t.write_off_reason}).`);
     if (t.status === 'reproduced') throw new Error(`Unit ${code} was reproduced (${t.write_off_reason}). Scan the new unit instead.`);
+    if (t.use_by && t.use_by < ymdLocal()) throw new Error(`Unit ${code} expired on ${showYmd(t.use_by)}. It cannot be sold or reproduced: take it out of stock in the Stock tab.`);
     return { kind: 'tray', code: t.code, product_id: t.product_id, label: enOf(state.productsById[t.product_id]) || t.product_name, carcasses: carcassNos(t), species: [...new Set((t.carcasses || []).map(c => c.species))], weight_kg: t.weight_kg, use_by: t.use_by };
   }
   const c = await api.carcassByNo(code.toUpperCase());
   if (c) {
     if (c.status === 'sold_whole') throw new Error(`Carcass ${c.no} was already sold whole.`);
-    return { kind: 'carcass', code: c.no, label: `Whole ${c.species.toLowerCase()}`, carcasses: [c.no], species: [c.species], weight_kg: c.weight_kg };
+    if (c.chiller_use_by && c.chiller_use_by < ymdLocal()) throw new Error(`Carcass ${c.no} expired in the chiller on ${showYmd(c.chiller_use_by)}. It cannot be sold.`);
+    return { kind: 'carcass', code: c.no, label: `Whole ${c.species.toLowerCase()}`, carcasses: [c.no], species: [c.species], weight_kg: c.weight_kg, use_by: c.chiller_use_by };
   }
   throw new Error(`Nothing found for ${code}. Was the label printed by this system?`);
 }
@@ -821,6 +896,7 @@ onEnter($('pScan'), async v => {
   if (items.some(i => i.code === v || i.code === v.toUpperCase())) { msg($('pMsg'), `${v} is already scanned.`, 'warn'); return; }
   try {
     const it = await lookupItem(v);
+    if (!(await expiryOk(it.code, it.use_by, 'Sell'))) { msg($('pMsg'), `${it.code} was not added.`, 'info'); return; }
     if (it.kind === 'carcass' && !(await wholeSale(it, $('pMsg')))) return;
     const lines = orderLines();
     if (lines.length && (it.kind === 'tray' || it.product_id)) {
@@ -990,16 +1066,44 @@ onEnter($('kScan'), async v => {
   if (items.some(i => i.code === v || i.code === v.toUpperCase())) { msg($('kMsg'), `${v} is already scanned.`, 'warn'); return; }
   try {
     const it = await lookupItem(v);
+    if (!(await expiryOk(it.code, it.use_by, 'Sell'))) { msg($('kMsg'), `${it.code} was not added.`, 'info'); return; }
     if (it.kind === 'carcass' && !(await wholeSale(it, $('kMsg')))) return;
     items.push(it); msg($('kMsg'), `Added ${it.label}.`, 'ok'); $('kResult').innerHTML = ''; renderCounter();
   }
   catch (err) { msg($('kMsg'), errText(err), 'err'); }
 });
+// After payment in Zid POS: list the latest Zid orders, best match to the scanned units first, to tap the right one
+const zidLocalIds = op => state.products.filter(p => (op.zid_product_id && p.zid_product_id === op.zid_product_id) || (op.barcode && p.barcode === op.barcode) || (op.sku && p.sku === op.sku)).map(p => p.id);
+$('kPick').addEventListener('click', async () => {
+  const b = $('kPick'); b.disabled = true; $('kPicks').innerHTML = '<p class="hint">Asking Zid for the latest orders…</p>';
+  try {
+    const zr = await api.zid('recent_orders', { since_minutes: 90, around: [new Date().toISOString()] });
+    const want = [...new Set(state.counter.items.map(i => i.product_id).filter(Boolean))];
+    const list = (zr.orders || []).map(z => {
+      const lines = (z.products || []).map(l => ({ ids: zidLocalIds(l), name: l.name || l.sku || '?', q: l.quantity }));
+      const hits = want.filter(pid => lines.some(l => l.ids.includes(pid))).length;
+      const at = [z.created_at, z.created_at_utc].filter(Boolean).map(t => Date.parse(t)).sort((a, c) => Math.abs(Date.now() - a) - Math.abs(Date.now() - c))[0];
+      return { z, lines, hits, at };
+    }).sort((a, c) => c.hits - a.hits || (c.at || 0) - (a.at || 0)).slice(0, 8);
+    if (!list.length) { $('kPicks').innerHTML = '<p class="hint">Zid has no new unlinked orders in the last 90 minutes. Wait a few seconds after payment and press Find again, or type the number.</p>'; return; }
+    $('kPicks').innerHTML = `<div class="picks">${list.map((x, i) => `<button type="button" class="pick" data-pick="${esc(x.z.id)}" aria-pressed="false">
+      <span><b>${esc(x.z.code || x.z.id)}</b> · ${hhmm(x.at)}${x.z.customer ? ` · ${esc(x.z.customer)}` : ''}</span>
+      <span class="hint">${x.lines.map(l => `${esc(l.name)} × ${esc(l.q)}`).join(', ') || 'no products'}</span>
+      ${want.length && x.hits === want.length && i === 0 ? '<span class="chip good">Best match</span>' : want.length && x.hits ? `<span class="chip">${x.hits} of ${want.length} products match</span>` : ''}</button>`).join('')}</div>`;
+  } catch (err) { $('kPicks').innerHTML = `<div class="msg err">${esc(errText(err))}</div>`; }
+  finally { b.disabled = false; }
+});
+$('kPicks').addEventListener('click', e => {
+  const b = e.target.closest('[data-pick]'); if (!b) return;
+  $('kReceipt').value = b.dataset.pick;
+  document.querySelectorAll('#kPicks [data-pick]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  $('kConfirm').focus();
+});
 $('kRows').addEventListener('click', e => { const b = e.target.closest('[data-rm-k]'); if (!b) return; state.counter.items.splice(+b.dataset.rmK, 1); renderCounter(); $('kScan').focus(); });
 $('kConfirm').addEventListener('click', async () => {
   const items = state.counter.items; if (!items.length) return;
   const whole = items.filter(i => i.kind === 'carcass');
-  if (!(await ask(`Record this sale of ${items.length} item${items.length > 1 ? 's' : ''}?`, `${saleTable(items)}${whole.length ? `<p><strong>Whole carcass sold: ${whole.map(i => esc(i.code)).join(', ')}.</strong> It cannot be cut after this.</p>` : ''}<p class="hint">Check it matches what you rang up in Zid POS.</p>`, 'Yes, record the sale'))) return;
+  if (!(await ask(`Record this sale of ${items.length} item${items.length > 1 ? 's' : ''}?`, `${saleTable(items)}${whole.length ? `<p><strong>Whole carcass sold: ${whole.map(i => esc(i.code)).join(', ')}.</strong> It cannot be cut after this.</p>` : ''}${$('kReceipt').value.trim() ? `<p>Zid order: <strong class="code">${esc($('kReceipt').value.trim())}</strong></p>` : '<p><strong>No Zid order chosen.</strong> The Meatrix will try to match it by itself. Better: press Cancel, then Find the Zid order.</p>'}<p class="hint">Check it matches what you rang up in Zid POS.</p>`, 'Yes, record the sale'))) return;
   $('kConfirm').disabled = true;
   try {
     const ref = $('kReceipt').value.trim();
@@ -1010,7 +1114,7 @@ $('kConfirm').addEventListener('click', async () => {
       catch (err) { zidLine = ` Could not add it to the Zid order (${esc(errText(err))}).`; }
     }
     msgHtml($('kResult'), `<strong>Sale recorded.${zidLine}${ref ? '' : ' The Meatrix will find its Zid POS order by itself.'}</strong> <span class="code">${esc(o.trace_summary)}</span>`, ref && !zidLine.startsWith(' Could') ? 'ok' : (ref ? 'warn' : 'ok'));
-    state.counter.items = []; $('kReceipt').value = ''; renderCounter(); loaders.counter(); $('kScan').focus();
+    state.counter.items = []; $('kReceipt').value = ''; $('kPicks').innerHTML = ''; renderCounter(); loaders.counter(); $('kScan').focus();
     if (!ref) setTimeout(() => autoLinkCounter(false, true), 60000);
   } catch (err) { msg($('kMsg'), 'Could not record: ' + errText(err), 'err'); $('kConfirm').disabled = false; }
 });
@@ -1051,7 +1155,58 @@ $('sWriteOff').addEventListener('click', async () => {
 
 /* ---------------- carcasses & yield ---------------- */
 let yieldRows = [];
+// yield analytics: by animal and butcher for the chosen period, and a weekly line per animal
+let yaDays = 30;
+const SERIES = 5; // fixed colour order follows the animals' order in Settings
+function yieldLines(weeks) {
+  const order = state.species.map(x => x.name), names = [...new Set(weeks.map(w => w.species))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const start = new Date(), wks = [];
+  start.setDate(start.getDate() - ((start.getDay() + 1) % 7));
+  for (let i = 11; i >= 0; i--) { const d = new Date(start); d.setDate(d.getDate() - 7 * i); wks.push(ymdLocal(d)); }
+  const val = (n, w) => weeks.find(x => x.species === n && x.week === w);
+  const vals = weeks.map(w => num(w.yield));
+  const lo = Math.max(0, Math.floor((Math.min(...vals, 100) - 5) / 10) * 10), hi = 100;
+  const W = 1000, H = 260, L = 44, B = 28, T = 10, R = 100, ph = H - B - T, gw = (W - L - R) / (wks.length - 1);
+  const x = i => L + gw * i, y = v => T + ph - (v - lo) / (hi - lo) * ph;
+  const col = n => `s${(order.indexOf(n) % SERIES + SERIES) % SERIES + 1}`;
+  let g = '';
+  for (let v = lo; v <= hi; v += 10) g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${v}%</text>`;
+  wks.forEach((w, i) => { if (i % 2 === 1 || i === wks.length - 1) g += `<text class="ax" x="${x(i)}" y="${H - 8}" text-anchor="middle">${i === wks.length - 1 ? 'This wk' : showYmd(w).replace(/\/\d{4}$/, '')}</text>`; });
+  g += `<line class="base" x1="${L}" x2="${W - R}" y1="${T + ph}" y2="${T + ph}"/>`;
+  names.forEach(n => {
+    const pts = wks.map((w, i) => { const v = val(n, w); return v ? [x(i), y(num(v.yield)), v] : null; });
+    let d = '', on = false;
+    pts.forEach(p => { if (p) { d += `${on ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`; on = true; } });
+    g += `<path class="ln ${col(n)}" d="${d}"/>` + pts.filter(Boolean).map(p => `<circle class="pt ${col(n)}" cx="${p[0]}" cy="${p[1]}" r="4"/>`).join('');
+    const last = pts.filter(Boolean).pop();
+    if (last && names.length <= 4) g += `<text class="ax lbl" x="${last[0] + 8}" y="${last[1] + 4}">${esc(n)}</text>`;
+  });
+  wks.forEach((w, i) => {
+    const rows = names.map(n => { const v = val(n, w); return v ? `${esc(n)}: ${pct(v.yield)} (${v.head} head)` : ''; }).filter(Boolean);
+    g += `<rect class="hit" x="${x(i) - gw / 2}" y="${T}" width="${gw}" height="${ph}" data-tip="${attr(`<b>Week of ${esc(showYmd(w))}</b><br>${rows.join('<br>') || 'No finished carcasses'}`)}"/>`;
+  });
+  $('yaLegend').innerHTML = names.map(n => `<span><i class="sw ${col(n)}"></i>${esc(n)}</span>`).join('');
+  return names.length ? `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weekly yield by animal">${g}</svg>` : '<p class="empty">No finished carcasses in the last 12 weeks.</p>';
+}
+async function loadYield() {
+  try {
+    const Y = await api.yieldAnalytics(yaDays);
+    const row = r => ({ label: r.species || r.name, value: r.yield, text: pct(r.yield), note: `${r.head} head · wastage ${pct(r.waste)} · shrinkage ${pct(r.shrink)}`,
+      tip: `<b>${esc(r.species || r.name)}</b><br>${r.head} carcass(es), ${n1(r.received_kg)} kg received<br>Yield ${pct(r.yield)}<br>Wastage ${pct(r.waste)}<br>Shrinkage ${pct(r.shrink)}` });
+    $('yaAnimals').innerHTML = hbars((Y.animals || []).map(row), 100, `No carcasses finished in the last ${yaDays} days.`);
+    $('yaButchers').innerHTML = hbars((Y.butchers || []).map(row), 100, `No carcasses finished in the last ${yaDays} days.`);
+    $('yaWeeks').innerHTML = yieldLines(Y.weeks || []);
+    msg($('yaMsg'), '');
+  } catch (err) { msg($('yaMsg'), errText(err), 'err'); }
+}
+$('yaDays').addEventListener('click', e => {
+  const b = e.target.closest('button[data-days]'); if (!b) return;
+  yaDays = +b.dataset.days;
+  $('yaDays').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  loadYield();
+});
 loaders.carcasses = async () => {
+  loadYield();
   try { yieldRows = await api.carcassYield(500); renderYield(); } catch (err) { $('yEmpty').hidden = false; $('yEmpty').textContent = errText(err); }
   try {
     const d = await api.dashboard(), bs = d.butchers || [];

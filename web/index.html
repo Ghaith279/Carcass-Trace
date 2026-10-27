@@ -57,22 +57,50 @@
     <section id="v-dash" hidden>
       <div class="stack">
         <div class="panel">
-          <div class="bar"><h2>Shop right now</h2><span class="hint" id="dUpdated"></span></div>
-          <div class="tiles" id="dTiles"></div>
+          <div class="bar"><h2>Today</h2><span class="hint" id="dUpdated"></span></div>
+          <div class="kpis" id="dKpis"></div>
           <div id="dMsg"></div>
-          <h3>Carcasses on hand, for tomorrow’s order</h3>
-          <div class="table-wrap"><table class="matrix">
-            <thead>
-              <tr><th rowspan="2">Animal</th><th colspan="2" class="grp hl">Whole, not cut yet</th><th colspan="2" class="grp">Being cut</th><th colspan="2" class="grp">All carcasses</th><th rowspan="2" class="num">Packed units in stock kg</th></tr>
-              <tr><th class="num hl">Head</th><th class="num hl">kg</th><th class="num">Head</th><th class="num">kg left</th><th class="num">Head</th><th class="num">kg</th></tr>
-            </thead>
-            <tbody id="dOnHand"></tbody>
-            <tfoot id="dOnHandTotal"></tfoot>
-          </table></div>
-          <p class="hint">“kg left” on a carcass being cut = received kg − packed − wastage.</p>
+          <p class="hint" id="dNote"></p>
+        </div>
+        <div class="grid2 even">
+          <div class="panel">
+            <h2>In the chiller</h2>
+            <p class="hint">Carcass kg still to cut, by animal. Carcasses being cut count only what is left on them.</p>
+            <div class="hbars" id="dChillChart"></div>
+          </div>
+          <div class="panel">
+            <h2>Packed stock</h2>
+            <p class="hint">kg of packed units in stock, by animal.</p>
+            <div class="hbars" id="dPackChart"></div>
+          </div>
         </div>
         <div class="panel">
-          <h2>Today by animal</h2>
+          <h2>Freshness</h2>
+          <p class="hint">How much life is left, weighted by kg. A carcass received today, or a unit packed today, is 100%; on its last day it is near 0%. Green above 60%, amber 30–60%, red below 30%.</p>
+          <div class="gauges" id="dGauges"></div>
+        </div>
+        <div class="panel">
+          <div class="bar"><h2>Last 7 days: received and sold</h2><div class="seg" id="dWeekFilter" role="group" aria-label="Animal"></div></div>
+          <div class="legend"><span><i class="sw s1"></i>Received kg</span><span><i class="sw s2"></i>Sold kg</span></div>
+          <div class="vchart" id="dWeek"></div>
+        </div>
+        <div class="grid2 even">
+          <div class="panel">
+            <h2>Wastage today by type</h2>
+            <div class="hbars" id="dWasteChart"></div>
+          </div>
+          <div class="panel">
+            <h2>Expiring soon</h2>
+            <p class="hint" id="dExpHint"></p>
+            <div class="table-wrap"><table>
+              <thead><tr><th>Code</th><th>What</th><th class="num">kg</th><th>Consume before</th></tr></thead>
+              <tbody id="dExp"></tbody>
+            </table></div>
+            <p class="empty" id="dExpEmpty">Nothing expires soon.</p>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Today by animal, in detail</h2>
           <p class="hint">Heads and kg. Units shared between carcasses of different animals are split between them.</p>
           <div class="table-wrap"><table class="matrix">
             <thead>
@@ -116,25 +144,6 @@
             <tbody id="dStock"></tbody>
           </table></div>
           <p class="empty" id="dStockEmpty">No units in stock.</p>
-        </div>
-        <div class="grid2">
-          <div class="panel">
-            <h2>Yield, last 30 days</h2>
-            <p class="hint">Finished carcasses. Shrinkage = received − packed − wastage.</p>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Animal</th><th class="num">Head</th><th class="num">Avg kg</th><th class="num">Yield</th><th class="num">Wastage</th><th class="num">Shrinkage</th></tr></thead>
-              <tbody id="dYield"></tbody>
-            </table></div>
-            <p class="empty" id="dYieldEmpty">No finished carcasses in the last 30 days.</p>
-          </div>
-          <div class="panel">
-            <h2>Wastage today</h2>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Type</th><th class="num">kg</th></tr></thead>
-              <tbody id="dWaste"></tbody>
-            </table></div>
-            <p class="empty" id="dWasteEmpty">No wastage recorded today.</p>
-          </div>
         </div>
         <form class="panel" id="xlForm">
           <div><h2>Download records (Excel)</h2><p class="hint">One sheet per record type, one row per day, carcass, unit, wastage entry and order. Download each month and paste the rows under last month's to build a full history.</p></div>
@@ -349,7 +358,11 @@
           <tbody id="kRows"></tbody>
         </table></div>
         <p class="empty" id="kEmpty">Scan a unit to start.</p>
-        <label>Zid order number from the POS (optional: if you leave it empty, The Meatrix finds the order itself)<input id="kReceipt" autocomplete="off"></label>
+        <div class="pick-row">
+          <label>Zid POS order <span class="hint">(after payment in Zid POS, press Find and tap the order)</span><input id="kReceipt" autocomplete="off" placeholder="Order number"></label>
+          <button class="btn" id="kPick" type="button">Find the Zid order</button>
+        </div>
+        <div id="kPicks"></div>
         <button class="btn primary big" id="kConfirm" type="button" disabled>Confirm sale</button>
         <div id="kResult"></div>
       </div>
@@ -430,6 +443,18 @@
     <!-- CARCASSES & YIELD -->
     <section id="v-carcasses" hidden>
       <div class="stack">
+        <div class="panel">
+          <div class="bar"><h2>Yield</h2><div class="seg" id="yaDays" role="group" aria-label="Period"><button type="button" data-days="7" aria-pressed="false">7 days</button><button type="button" data-days="30" aria-pressed="true">30 days</button><button type="button" data-days="90" aria-pressed="false">90 days</button></div></div>
+          <p class="hint">Finished carcasses only. Yield = kg packed ÷ kg received. The rest is wastage and shrinkage (weight that went missing).</p>
+          <div class="grid2 even">
+            <div><h3>By animal</h3><div class="hbars" id="yaAnimals"></div></div>
+            <div><h3>By butcher</h3><div class="hbars" id="yaButchers"></div></div>
+          </div>
+          <h3>Week by week, last 12 weeks</h3>
+          <div class="legend" id="yaLegend"></div>
+          <div class="vchart" id="yaWeeks"></div>
+          <div id="yaMsg"></div>
+        </div>
         <div class="panel">
           <h2>Average yield by farm</h2>
           <p class="hint">Finished carcasses only. Yield = kg packed into units ÷ kg received. Shrinkage = received − packed − wastage.</p>
